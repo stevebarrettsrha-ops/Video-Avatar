@@ -1,0 +1,21 @@
+[12:52:37] stand-in HuggingFace on 51695 · PyTorch from PyPI
+[12:52:45] run.sh: app answering at http://127.0.0.1:39233 after 8 s (made .venv, installed requirements)
+[12:52:46] setup offers: ['Install a fresh ComfyUI for Avatar Studio', 'Connect to a ComfyUI I start myself']
+[12:52:47] setup step: python
+[12:52:51] setup step: nodes
+[12:52:55] setup step: deps
+[12:55:39] setup step: launch
+[12:55:53] setup DONE in 186 s
+[12:55:53]     done · Check Python — e-user-Video-Avatar/dc5d983f-4d1a-51d0-8fa4-982dab727591/scratchpad/oob/LongCat-Avatar-Studio/.venv/bin/python
+[12:55:53]     done · Install ComfyUI — de-0/-home-user-Video-Avatar/dc5d983f-4d1a-51d0-8fa4-982dab727591/scratchpad/oob/LongCat-Avatar-Studio/ComfyUI
+[12:55:53]     done · Install the custom nodes — ComfyUI-WanVideoWrapper, ComfyUI-KJNodes, ComfyUI-MelBandRoFormer, ComfyUI-Manager
+[12:55:53]     done · Install dependencies — Installed into python
+[12:55:53]     done · Download the LongCat Avatar weights — 6 file(s) ready · 5.0 MB
+[12:55:53]     done · Start ComfyUI — http://127.0.0.1:8188
+[12:55:53] engine pill: Engine ready
+[12:56:03] 03-short-12s: done in 10 s · parts=2 · 200 frames (200 expected) · 832x480 · 16/1 fps · audio 12.500 s
+[12:56:03] 03-short-12s: PASS
+[12:56:22] 04-long-40s: done in 19 s · parts=4 · 640 frames (640 expected) · 832x480 · 16/1 fps · audio 40.000 s
+[12:56:22] 04-long-40s: PASS
+[12:56:29] script errors on the page: []
+[12:56:29] RESULT: OUT-OF-THE-BOX RUN PASSED

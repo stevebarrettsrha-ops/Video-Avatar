@@ -227,6 +227,10 @@ def stage_for(class_type: str) -> str:
         return "Reading the prompt"
     if c in ("LoadImage", "ImageResizeKJv2", "ImageScale"):
         return "Reading the picture"
+    if c in ("LoadVideo", "GetVideoComponents"):
+        return "Picking up from the part before"
+    if c in ("RepeatImageBatch", "ImageBatch"):      # rehearsal stand-ins
+        return "Decoding the frames"
     if c in ("LoadAudio", "TrimAudioDuration"):
         return "Reading the audio"
     if "MelBand" in c:
@@ -238,7 +242,8 @@ def stage_for(class_type: str) -> str:
         return "Moving the model onto the GPU"
     if "Loader" in c or "Lora" in c or "BlockSwap" in c or "Scheduler" in c:
         return "Loading the model"
-    if "Extend" in c or "Replace" in c or "GetImageRange" in c:
+    if "Extend" in c or "Replace" in c or "GetImageRange" in c \
+            or c in ("ImageFromBatch", "GetImageSizeAndCount"):
         return "Joining the windows"
     if "Encode" in c:
         return "Encoding the picture"

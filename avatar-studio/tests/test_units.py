@@ -216,6 +216,14 @@ def run(slow: bool = False) -> Suite:
             {k: v["quantization"] for k, v in bootstrap.PRECISIONS.items()},
             {"fp8": "fp8_e4m3fn", "bf16": "disabled"})
 
+    # -- every node the graphs use has a stage in words ----------------------
+    import server
+    import json as _json
+    used = set(_json.loads((ROOT / "tests" / "object_info.json").read_text()))
+    raw = sorted(c for c in used if server.stage_for(c) == c)
+    s.equal("every node the app queues shows as a stage in words, never its "
+            "class name", raw, [])
+
     # -- launching the engine ----------------------------------------------
     import os
     import tempfile

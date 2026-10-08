@@ -1,15 +1,18 @@
 # Test report — LongCat Avatar Studio
 
-**Result: 267 of 267 checks pass** (`python tests/run.py`, 334 s with the real engine).
+**Result: 270 of 270 checks pass, and an out-of-the-box run from the
+shipped zip passes.**
+
+Earlier result line, kept for history: 267 of 267 checks pass (`python tests/run.py`, 334 s with the real engine).
 
 | Suite | Checks | What it proves |
 |---|---:|---|
 | gate | 5 | Every module compiles; the page's script parses; every id the script uses exists; every button, chip and slider has a listener; `run.sh` parses. |
-| units | 52 | Frame and window maths read from kijai's workflow file. The page's copy of the maths gives the same answers. The weight set and folders; the preflight verdicts; the RAM estimate; how ComfyUI is launched. |
+| units | 53 | Frame and window maths read from kijai's workflow file. The page's copy of the maths gives the same answers. The weight set and folders; the preflight verdicts; the RAM estimate; how ComfyUI is launched. |
 | graph | 73 | The graphs `comfy.py` builds, against the real node schema: window wiring, seams, audio routing, every setting, and the fallbacks for missing optional parts. |
 | api | 59 | The server end to end: uploads, validation, two-window renders with per-window progress, seeds, cancel, delete, the localhost guard, the preflight, the dependency list, a full set download, and stale or old engines. |
 | stress | 20 | 400 fuzzed requests, 12 concurrent renders, parallel uploads and deletes, hostile paths, and damaged gallery/config files. |
-| ui | 25 | The page in Chromium: picture and speech, trimming, the plan line, the RAM warning, settings, generate, the lightbox, reuse, **recording from a (fake) microphone**, a draft surviving a reload, and every page. |
+| ui | 27 | The page in Chromium: picture and speech, trimming, the plan line, the RAM warning, settings, generate, the lightbox, reuse, **recording from a (fake) microphone**, a draft surviving a reload, and every page. |
 | real | 33 | **A real ComfyUI 0.39** with the three node packs. Details below. |
 
 ## Against a real ComfyUI
@@ -73,6 +76,46 @@ install updated it in place in 13 seconds.
    in parts and joined, with no length limit.
 7. **The empty-feed message was split across grid columns**, and the Seed
    row read "Random / Random". Both are fixed.
+
+## Out of the box: the shipped zip, start to finish
+
+`tests/out_of_the_box.py` does what a new user does, on a clean folder:
+
+1. Unzip `LongCat-Avatar-Studio.zip`.
+2. Run its own `run.sh`. It creates `.venv` and installs the requirements;
+   the app answered in 8 s.
+3. Click **Install a fresh ComfyUI** on the setup sheet. Every step went
+   green in 3 min 6 s: ComfyUI, the four node packs, `comfy-venv` with
+   PyTorch and all requirements, the six weight files, and ComfyUI started.
+   The engine pill read **Engine ready**.
+4. Through the page, render a 12.5 s clip and a 40 s clip. The files, as
+   ffprobe sees them:
+
+| Clip | Parts | Frames | fps | Size | Audio |
+|---|---|---|---|---|---|
+| 12.5 s | 2 | 200 (200 expected) | 16 | 832×480 | 12.500 s |
+| 40 s | 4 | 640 (640 expected) | 16 | 832×480 | 40.000 s |
+
+There were no script errors on the page, and the result was **OUT-OF-THE-BOX
+RUN PASSED** (log: `docs/out-of-the-box-run.log`, screenshots:
+`docs/screenshots/out-of-the-box/`).
+
+Four stand-ins were used because this sandbox has no internet route to
+them and no GPU:
+
+- a stand-in HuggingFace (`tests/mock_hf.py`);
+- PyTorch from PyPI instead of download.pytorch.org;
+- ComfyUI with `--cpu`;
+- stand-in frames in place of the model (`AVATAR_REHEARSAL=1`).
+
+On a real machine all four are dropped.
+
+The first attempt found one more bug. **Pressing Generate while a new audio
+file was still uploading rendered the previous audio**, without saying so.
+Generate is now held ("Uploading…") until every upload has finished, and
+the browser test covers it. A progress line that showed a raw node name
+("GetVideoComponents") now reads "Picking up from the part before". A unit
+check now makes sure every node the app queues has a stage in words.
 
 ## No length limit: long clips in parts
 

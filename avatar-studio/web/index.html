@@ -681,7 +681,7 @@ var S = {
   view: "create", size: "832x480", image: null, audio: null,
   status: null, jobs: [], images: [], libFilter: "", batch: 1,
   setupCursor: 0, taskId: null, taskCursor: 0, setupSeen: false, lightbox: null,
-  rec: null
+  rec: null, uploading: 0
 };
 function $(id) { return document.getElementById(id); }
 async function api(path, opts) {
@@ -883,10 +883,21 @@ function setImage(name, url) {
   }
   saveDraft();
 }
+// While anything is uploading, Generate waits: pressed mid-upload it would
+// render the picture or speech that was there before, without a word.
+function syncBusy() {
+  var busy = S.uploading > 0;
+  $("btnGenerate").disabled = busy;
+  $("genLabel").textContent = busy ? "Uploading…"
+    : (S.status && !S.status.ready ? "Set up" : "Generate");
+}
 async function uploadFile(file, name) {
   var fd = new FormData();
   fd.append("file", file, name || file.name);
-  return (await api("/api/upload", { method: "POST", body: fd })).name;
+  S.uploading++; syncBusy();
+  try {
+    return (await api("/api/upload", { method: "POST", body: fd })).name;
+  } finally { S.uploading--; syncBusy(); }
 }
 async function pickImage(file) {
   if (!file) return;
@@ -937,6 +948,7 @@ function measure(file) {
 }
 async function pickAudio(file) {
   if (!file) return;
+  S.uploading++; syncBusy();            // measuring counts as uploading
   try {
     var duration = await measure(file);
     var name = await uploadFile(file);
@@ -945,6 +957,7 @@ async function pickAudio(file) {
     if (!duration) toast("Added. The browser could not measure it — press play " +
                          "once so its length is known.");
   } catch (e) { toast(e.message, true); }
+  finally { S.uploading--; syncBusy(); }
 }
 // A recording becomes a plain 16-bit WAV before it leaves the page: every
 // ComfyUI build reads WAV, not every one reads the browser's webm/opus.
@@ -1088,6 +1101,7 @@ function blockedFromRendering() {
   return true;
 }
 async function generate() {
+  if (S.uploading) { toast("Still uploading — Generate when it is done."); return; }
   if (!S.image) { show("create"); toast("Add a picture of the person first.", true); return; }
   if (!S.audio) { show("create"); toast("Add the speech — record it, or choose an audio file.", true); return; }
   if (!clipSeconds()) {
@@ -1866,7 +1880,7 @@ async function refreshStatus() {
     : (st.missing_models || []).length ? "Weights missing" : "Engine loading";
   $("modelsTag").hidden = !(st.missing_models && st.missing_models.length);
   $("engineTag").hidden = !!(st.comfy_online && st.nodes_ready);
-  $("genLabel").textContent = st.ready ? "Generate" : "Set up";
+  syncBusy();
   if (st.attentions && st.attentions.length) {
     var a = $("attn-sel"), want = a.dataset.want || a.value || "sdpa";
     a.innerHTML = "";
