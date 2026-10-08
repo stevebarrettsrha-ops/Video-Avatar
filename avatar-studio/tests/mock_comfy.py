@@ -187,7 +187,8 @@ def _execute(pid, graph):
         status = {"status_str": "success", "messages": []}
         outputs = {}
         with LOCK:
-            ext = ".webm" if TEST_VIDEO else ".mp4"
+            ext = ".webm" if TEST_VIDEO and TEST_VIDEO[0][4:8] != b"ftyp" \
+                else ".mp4"
         for nid, node in graph.items():
             if node["class_type"] == "SaveVideo":
                 prefix = node["inputs"].get("filename_prefix", "video/ComfyUI")
@@ -248,6 +249,18 @@ def validate(graph):
                 if str(value[0]) not in graph:
                     node_errs.append({"message": "Link to a node that is not "
                                       "in the prompt", "details": f"{name}={value}"})
+                    continue
+                # the source must have that output, of a type this input takes
+                src = info_all.get(graph[str(value[0])]["class_type"]) or {}
+                outs = src.get("output") or []
+                if value[1] >= len(outs):
+                    node_errs.append({"message": "Link to an output that does "
+                                      "not exist", "details": f"{name}={value}"})
+                elif isinstance(kind, str) and kind != "*" and \
+                        outs[value[1]] != "*" and outs[value[1]] != kind:
+                    node_errs.append({"message": "Return type mismatch",
+                                      "details": f"{name}: {outs[value[1]]} "
+                                                 f"into {kind}"})
                 continue
             if isinstance(kind, list):
                 if value not in kind:
@@ -357,7 +370,8 @@ class H(BaseHTTPRequestHandler):
             with LOCK:
                 real = TEST_VIDEO[0] if TEST_VIDEO else None
             if real:
-                self._send(200, real, "video/webm")
+                self._send(200, real, "video/mp4" if real[4:8] == b"ftyp"
+                           else "video/webm")
             else:
                 self._send(200, FAKE_MP4, "video/mp4")
         elif p == "/queue":

@@ -11,7 +11,7 @@ setup sheet, and Models and Engine pages. Generation runs on kijai's
 [ComfyUI-WanVideoWrapper](https://github.com/kijai/ComfyUI-WanVideoWrapper),
 following his official example workflow (copied to `assets/`).
 
-![The Create page, mid-render](assets/screenshot.png)
+![The Create page, mid-render: window 2 of 3](assets/screenshot.png)
 
 ---
 
@@ -43,6 +43,14 @@ make it fit:
 - **umT5 on the CPU.** The 11 GB text encoder never touches the GPU. It
   costs about a minute per new prompt, and the result is cached on disk.
 - **Tiled VAE, 480p, the distill LoRA** (12 steps at cfg 1).
+
+**How long a clip can be is set by RAM, not the GPU.** The decoded frames
+are float32, about four copies alive while the windows are joined
+(measured: 500 frames at 832×480 took 9.3 GB). Beside the fp8 model on a
+32 GB machine that is about **42 s at 480p, or 18 s at 720p**, per clip. The
+Create page shows the estimate for each clip and warns, with the part length
+to use, when it is over. For longer speech, render it in parts with **Start
+at** / **Length**.
 
 **Nothing here has been timed on a real 8 GB card yet.** Expect several
 minutes per 5.8-second window. The first real render will give the true
@@ -136,9 +144,15 @@ lips listen to the isolated voice.
 ## Tests
 
 ```bash
-python tests/run.py            # gate + units + graph + api + ui
+python tests/run.py            # gate, units, graph, api, stress, ui (+ real)
 python tests/run.py graph api  # just those
+AVATAR_REAL_COMFY=http://127.0.0.1:8188 AVATAR_REAL_MODELS=/path/ComfyUI/models \
+    python tests/run.py real   # against a real ComfyUI with the three packs
 ```
+
+**237 checks**, all passing. See [docs/TEST_REPORT.md](docs/TEST_REPORT.md)
+for what each suite proves and the bugs the testing found, and
+[docs/screenshots/](docs/screenshots/) for every screen.
 
 `tests/object_info.json` is not guessed. It is the real `/object_info` of
 ComfyUI 0.39 with the three node packs loaded, cut down to the nodes this
@@ -160,6 +174,10 @@ assets/        kijai's example workflow this follows, and a screenshot
 tests/         python tests/run.py: the suite, against a mock ComfyUI
 data/          config.json, gallery.json, clips/
 ```
+
+`AVATAR_COMFY_ARGS` adds flags to the ComfyUI the app starts, e.g.
+`--use-sage-attention`. A memory mode (`--cpu`, `--highvram`, `--novram`)
+replaces the app's `--lowvram`, since ComfyUI takes only one.
 
 Port: `AVATAR_STUDIO_PORT` (default 7808). `AVATAR_STUDIO_NO_BROWSER=1`
 stops it opening a tab. `AVATAR_STUDIO_DATA` moves the data folder.

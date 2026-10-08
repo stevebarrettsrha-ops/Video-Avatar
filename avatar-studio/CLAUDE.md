@@ -39,6 +39,14 @@
     the note says it is untimed on real hardware until someone times it.
     Python detection by execution, downloads resumable, model deletes
     path-checked — as in the sibling apps.
+11. **Link outputs by name.** `ImageBatchExtendWithOverlap`'s output 0 is
+    a passthrough; joining from it dropped every window but the first, and
+    ComfyUI accepted it (all IMAGE). `_out()` resolves by output name.
+12. **`--cache-none` always; `--lowvram` unless the person set a memory
+    mode** (`AVATAR_COMFY_ARGS`). ComfyUI refuses two modes, and without
+    `--cache-none` the joined frames pile up (a 31 s clip was OOM-killed).
+    Frame RAM is `frames × w × h × 3 × 4 × 4` (`frame_ram()`, mirrored in
+    the page, within 3 % of a real measurement).
 
 ## Graceful degradation
 
@@ -58,6 +66,6 @@ hand-written schema.
 ## Validation gate
 
 ```bash
-python tests/run.py            # gate + units + graph + api + ui
+python tests/run.py            # gate units graph api stress ui (+ real)
 python tests/run.py gate       # compile, inline script parse, ids, wiring
 ```

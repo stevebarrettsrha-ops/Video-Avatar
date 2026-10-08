@@ -98,6 +98,26 @@ def window_count(frames: int) -> int:
     return 1 + max(0, int(math.ceil((frames - WINDOW) / STEP)))
 
 
+# Decoded frames are float32 RGB, and while the windows are joined about four
+# copies of the batch are alive at once. Measured on a real ComfyUI running
+# the app's own joins with --cache-none: 500 frames at 832x480 peaked 9.3 GB
+# above idle, 18.6 MB a frame, 3.9 frame-sized copies.
+FRAME_COPIES = 4
+# What the frames may take beside the fp8 model (~14 GB, offloaded to RAM)
+# and the OS on a 32 GB machine.
+FRAME_BUDGET = 12 * 1024 ** 3
+
+
+def frame_ram(frames: int, width: int, height: int) -> int:
+    """Bytes of RAM the decoded frames need at their peak."""
+    return frames * width * height * 3 * 4 * FRAME_COPIES
+
+
+def frames_fitting(width: int, height: int, budget: int = FRAME_BUDGET) -> int:
+    """How many frames at this size fit the budget."""
+    return budget // (width * height * 3 * 4 * FRAME_COPIES)
+
+
 def rendered_frames(windows: int) -> int:
     """Frames the windows actually produce, before trimming to the audio."""
     return WINDOW + (windows - 1) * STEP
@@ -301,6 +321,17 @@ class ComfyClient:
             if c.lower() in low:
                 return low[c.lower()]
         return None
+
+    def _out(self, class_type: str, name: str, fallback: int = 0) -> int:
+        """The index of a node's output, found by its name.
+
+        ImageBatchExtendWithOverlap returns source_images, start_images,
+        extended_images — all IMAGE, so a link to the wrong one is valid,
+        queues, runs, and quietly drops every window but the first. Asking
+        by name is what the workflow's links do.
+        """
+        names = (self.schema().get(class_type) or {}).get("output_name") or []
+        return names.index(name) if name in names else fallback
 
     def _default(self, definition):
         """(True, value) for an input ComfyUI would want filled, else (False, None)."""
@@ -561,7 +592,7 @@ class ComfyClient:
                 "model": {"names": ["model"], "value": ["22", 0], "required": True},
                 "audio": {"names": ["audio"], "value": audio_ref,
                           "required": True}})
-            speech_ref = ["23", 0]
+            speech_ref = ["23", self._out(MELBAND, "vocals")]
         elif p.get("isolate_voice", True):
             note = ("Voice isolation was skipped (MelBandRoFormer is not "
                     "installed or has no model), so background sound in the "
@@ -603,6 +634,8 @@ class ComfyClient:
         cfg = float(p.get("cfg") or 1.0)
         samplers: dict[str, int] = {}
         window_of: dict[str, int] = {}
+        samples_out = self._out(SAMPLER, "samples")
+        joined_out = self._out("ImageBatchExtendWithOverlap", "extended_images", 2)
         images_ref: list | None = None
         prev_samples: list | None = None
         done = 0                                  # frames decoded so far
@@ -644,7 +677,7 @@ class ComfyClient:
                 "noise": {"names": ["add_noise_to_samples"], "value": False}})
             samplers[smp] = w
             if w == 0:
-                g[dec] = self._decode(["4", 0], [smp, 0], tiled)
+                g[dec] = self._decode(["4", 0], [smp, samples_out], tiled)
                 images_ref = [dec, 0]
                 done = WINDOW
             else:
@@ -657,7 +690,8 @@ class ComfyClient:
                     "count": {"names": ["num_frames"], "value": OVERLAP}})
                 g[enc] = self._encode(["4", 0], [rng, 0], tiled)
                 g[rep] = self._node("ReplaceVideoLatentFrames", {
-                    "dest": {"names": ["destination"], "value": [smp, 0],
+                    "dest": {"names": ["destination"],
+                             "value": [smp, samples_out],
                              "required": True},
                     "src": {"names": ["source"], "value": [enc, 0],
                             "required": True},
@@ -671,9 +705,9 @@ class ComfyClient:
                     "overlap": {"names": ["overlap"], "value": OVERLAP},
                     "side": {"names": ["overlap_side"], "value": "new_images"},
                     "mode": {"names": ["overlap_mode"], "value": "cut"}})
-                images_ref = [cat, 0]
+                images_ref = [cat, joined_out]
                 done += STEP
-            prev_samples = [smp, 0]
+            prev_samples = [smp, samples_out]
             window_of.update({k: w for k in (ext, smp, rng, enc, rep, dec, cat)
                               if k in g})
 
@@ -704,7 +738,8 @@ class ComfyClient:
                 "window_of": window_of,
                 "width": width, "height": height, "fps": FPS,
                 "size": f"{width}x{height}",
-                "seconds": round(frames / FPS, 2), "note": note}
+                "seconds": round(frames / FPS, 2), "note": note,
+                "frame_ram": frame_ram(total, width, height)}
 
     def _encode(self, vae: list, image: list, tiled: bool) -> dict:
         return self._node("WanVideoEncode", {
@@ -791,7 +826,15 @@ class ComfyClient:
             for kind, data in status.get("messages", []):
                 if kind == "execution_error":
                     msg = str(data.get("exception_message", ""))
-                    if "out of memory" in msg.lower():
+                    low = msg.lower()
+                    if "deserializing header" in low or \
+                            "incomplete metadata" in low or \
+                            "safetensor" in low and "invalid" in low:
+                        return (f"{data.get('node_type')}: a model file it "
+                                "loads is damaged or unfinished ({}). Delete "
+                                "it on the Models page and download it "
+                                "again.".format(msg.strip()[:80]))
+                    if "out of memory" in low:
                         return (f"{data.get('node_type')}: out of memory. Use "
                                 "480p, raise Block swap in Settings, keep fp8 "
                                 "weights and tiled VAE on.")

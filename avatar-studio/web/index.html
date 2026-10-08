@@ -151,6 +151,8 @@
   .skel.bad .lbl{color:#ff9a9a}
   .empty{padding:60px 20px;text-align:center;color:var(--dim);font-size:13px}
   .empty b{display:block;color:var(--muted);font-size:14px;margin-bottom:6px}
+  /* inside the masonry the message must span the columns, not be split by them */
+  .masonry .empty{column-span:all;break-inside:avoid}
 
   /* ---------- popovers ---------- */
   .pop{max-height:calc(100vh - 24px);overflow-y:auto}
@@ -580,8 +582,8 @@
       <button class="on" data-v="cpu">CPU</button><button data-v="gpu">GPU</button>
     </div></div></div>
   <div class="orow"><span class="lab">Seed</span><div class="ctl">
-    <input type="text" id="seed" placeholder="Random" inputmode="numeric">
-    <button class="btn thin" id="btnSeedClear">Random</button></div></div>
+    <input type="text" id="seed" placeholder="random each time" inputmode="numeric">
+    <button class="btn thin" id="btnSeedClear" title="Back to a random seed">Clear</button></div></div>
   <div class="orow" style="display:block"><span class="lab">Avoid (negative prompt)</span>
     <textarea id="neg-prompt" rows="3" spellcheck="false" style="margin-top:7px"></textarea></div>
   <p class="note" id="costNote"></p>
@@ -740,6 +742,13 @@ function frameCount(sec) {
 function windowCount(frames) {
   return 1 + Math.max(0, Math.ceil((frames - WINDOW) / STEP));
 }
+// comfy.frame_ram(): decoded frames are float32 RGB, about four copies alive
+// while the windows are joined (measured on a real ComfyUI)
+var FRAME_COPIES = 4, FRAME_BUDGET = 12 * 1024 * 1024 * 1024;
+function frameRam(frames, w, h) { return frames * w * h * 3 * 4 * FRAME_COPIES; }
+function framesFitting(w, h) {
+  return Math.floor(FRAME_BUDGET / (w * h * 3 * 4 * FRAME_COPIES));
+}
 // The stretch of audio a clip is made from: from the start offset, for the
 // chosen length or to the end, never past two minutes.
 function clipSeconds() {
@@ -767,10 +776,20 @@ function syncPlan() {
       "audio.</span>";
   } else {
     var f = frameCount(sec), w = windowCount(f);
+    var rendered = WINDOW + (w - 1) * STEP;
+    var ram = frameRam(rendered, d[0], d[1]);
     note.innerHTML = "<b>" + d[0] + "×" + d[1] + "</b> · <b>" + sec.toFixed(1) +
       " s</b> of speech → " + f + " frames at 16 fps, rendered as <b>" + w +
       " window" + (w > 1 ? "s" : "") + "</b> of 93 frames (5.8 s each" +
-      (w > 1 ? ", every later one re-using the last 13 frames" : "") + ").";
+      (w > 1 ? ", every later one re-using the last 13 frames" : "") +
+      "). The frames need about <b>" + (ram / 1073741824).toFixed(1) +
+      " GB</b> of RAM while they are joined.";
+    if (ram > FRAME_BUDGET) {
+      var fit = Math.floor(framesFitting(d[0], d[1]) / FPS);
+      note.innerHTML += ' <span class="bad-text" id="ramWarn">That is more than ' +
+        "fits beside the model on a 32 GB machine — render it in parts of " +
+        "about " + fit + " s (Start at / Length), or pick a smaller size.</span>";
+    }
   }
   var cost = $("costNote");
   if (cost) {

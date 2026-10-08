@@ -109,6 +109,16 @@ def run(slow: bool = False) -> Suite:
                            .replace("'", "\""))
         s.equal("the page offers exactly the server's sizes",
                 {k: tuple(v) for k, v in sizes.items()}, comfy.SIZES)
+        fns_ram = consts_js + re.search(r"var FRAME_COPIES.*?\n", script).group(0) \
+            + re.search(r"function frameRam\(.*?\n", script).group(0) \
+            + re.search(r"function framesFitting\(.*?\n}\n", script, re.S).group(0)
+        probe = fns_ram + "console.log(JSON.stringify([frameRam(500,832,480)," \
+            "framesFitting(832,480),framesFitting(1280,720)]))"
+        got = json.loads(subprocess.run(["node", "-e", probe], capture_output=True,
+                                        text=True).stdout or "null")
+        s.equal("the page's RAM estimate matches Python's", got,
+                [comfy.frame_ram(500, 832, 480), comfy.frames_fitting(832, 480),
+                 comfy.frames_fitting(1280, 720)])
         neg = re.search(r'var DEFAULT_NEGATIVE = (.*?);\n', script, re.S).group(1)
         neg_text = subprocess.run(["node", "-e", f"console.log({neg})"],
                                   capture_output=True, text=True).stdout.strip()
@@ -117,6 +127,15 @@ def run(slow: bool = False) -> Suite:
     else:
         print("  --   node is not installed, so the page's maths was not run")
 
+    measured = 9.32e9           # the real run: 500 frames, 832x480, above idle
+    s.check("the RAM estimate is within 10% of the real measurement",
+            abs(comfy.frame_ram(500, 832, 480) - measured) / measured < 0.1,
+            f"{comfy.frame_ram(500, 832, 480)/1e9:.2f} GB vs 9.32 GB")
+    s.check("at 480p, ~42 s fits the 12 GB frame budget; 720p ~18 s",
+            40 <= comfy.frames_fitting(832, 480) / comfy.FPS < 45
+            and 16 <= comfy.frames_fitting(1280, 720) / comfy.FPS < 20,
+            f"{comfy.frames_fitting(832, 480)/16:.1f} s, "
+            f"{comfy.frames_fitting(1280, 720)/16:.1f} s")
     s.equal("the server's negative prompt is the workflow's",
             comfy.DEFAULT_NEGATIVE,
             widgets(wf, "WanVideoTextEncodeCached")[0][3])
@@ -155,6 +174,45 @@ def run(slow: bool = False) -> Suite:
     s.equal("fp8 and bf16 are the two ways the model can sit in memory",
             {k: v["quantization"] for k, v in bootstrap.PRECISIONS.items()},
             {"fp8": "fp8_e4m3fn", "bf16": "disabled"})
+
+    # -- launching the engine ----------------------------------------------
+    import os
+    import tempfile
+    import time as _time
+    tmp = Path(tempfile.mkdtemp(prefix="avatar-launch-"))
+    (tmp / "main.py").write_text(
+        "import sys, pathlib\n"
+        "pathlib.Path(__file__).with_name('argv.txt').write_text(' '.join(sys.argv[1:]))\n"
+        "print('main.py: error: pretend ComfyUI refused its flags')\n"
+        "sys.exit(2)\n")
+    bootstrap.DATA_DIR = tmp
+    from harness import free_port
+
+    def launch(extra: str) -> tuple[str, float, bool]:
+        os.environ["AVATAR_COMFY_ARGS"] = extra
+        proc, prog = bootstrap.ComfyProcess(), bootstrap.Progress()
+        proc.start(sys.executable, tmp, free_port(), prog, lowvram=True)
+        began = _time.time()
+        up = bootstrap.wait_for_comfy(f"http://127.0.0.1:{free_port()}",
+                                      timeout=60, alive=proc.alive)
+        return (tmp / "argv.txt").read_text(), _time.time() - began, up
+    try:
+        argv, took, up = launch("")
+        s.check("the engine starts in low-VRAM mode, cache off, previews on",
+                "--lowvram" in argv and "--cache-none" in argv
+                and "--preview-method auto" in argv, argv)
+        argv, took, up = launch("--cpu")
+        s.check("a memory mode of the person's own replaces --lowvram "
+                "(ComfyUI refuses both)",
+                "--cpu" in argv and "--lowvram" not in argv
+                and "--cache-none" in argv, argv)
+        argv, _, _ = launch("--use-sage-attention")
+        s.check("other flags ride along beside low-VRAM mode",
+                "--use-sage-attention" in argv and "--lowvram" in argv, argv)
+        s.check("an engine that dies at start ends the wait in seconds, not "
+                "15 minutes", not up and took < 10, f"{took:.1f} s")
+    finally:
+        os.environ.pop("AVATAR_COMFY_ARGS", None)
 
     # -- the preflight verdicts --------------------------------------------
     gib = 1024 ** 3

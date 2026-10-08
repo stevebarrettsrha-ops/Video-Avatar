@@ -120,8 +120,14 @@ def run(slow: bool = False) -> Suite:
                     c[1]["inputs"]["overlap_mode"] == "cut"
                     and c[1]["inputs"]["overlap_side"] == "new_images"
                     and c[1]["inputs"]["overlap"] == 13 for c in cats))
-        s.check("the second join extends the first join's batch",
-                cats[1][1]["inputs"]["source_images"] == [cats[0][0], 0])
+        s.check("each join takes the previous join's extended_images "
+                "(output 2) — output 0 is a passthrough that drops windows",
+                cats[1][1]["inputs"]["source_images"] == [cats[0][0], 2])
+        last = nodes_of(g, "GetImageRangeFromBatch")
+        s.check("and the final trim reads the last join's extended_images",
+                any(n["inputs"]["start_index"] == 0
+                    and n["inputs"]["images"] == [cats[-1][0], 2]
+                    for _, n in last))
 
         # -- the audio half -------------------------------------------------
         trim_audio = nodes_of(g, "TrimAudioDuration")[0]

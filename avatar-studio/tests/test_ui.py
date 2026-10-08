@@ -121,6 +121,18 @@ def run(slow: bool = False) -> Suite:
             s.check("a start past the end says so",
                     "past the end" in page.locator("#planNote").inner_text())
             page.fill("#trimStart", "0")
+            s.check("a short clip carries no memory warning",
+                    page.locator("#ramWarn").count() == 0)
+            page.evaluate("S.audio.duration = 60; syncPlan()")
+            warn = page.locator("#ramWarn")
+            s.check("a minute at 480p warns it will not fit beside the model, "
+                    "and says how long a part should be",
+                    warn.count() == 1 and "about 42 s" in warn.inner_text(),
+                    warn.inner_text() if warn.count() else "no warning")
+            page.fill("#trimLen", "40")
+            s.check("a 40 s part fits", page.locator("#ramWarn").count() == 0)
+            page.fill("#trimLen", "")
+            page.evaluate("S.audio.duration = 7.5; syncPlan()")
             page.click('#segSize button[data-v="480x832"]')
             s.check("portrait is chosen",
                     "480×832" in page.locator("#planNote").inner_text())

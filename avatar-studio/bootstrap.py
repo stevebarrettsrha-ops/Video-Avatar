@@ -795,6 +795,10 @@ def _download_file(cfg: dict, repo: str, path: str, dest: Path,
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 
+VRAM_MODES = ("--gpu-only", "--highvram", "--normalvram", "--lowvram",
+              "--novram", "--cpu")
+
+
 class ComfyProcess:
     def __init__(self) -> None:
         self.proc: subprocess.Popen | None = None
@@ -821,14 +825,25 @@ class ComfyProcess:
         cmd = [python, str(Path(comfy_dir).resolve() / "main.py"),
                "--listen", "127.0.0.1", "--port", str(port),
                "--disable-auto-launch"]
+        extra = os.environ.get("AVATAR_COMFY_ARGS", "").split()
+        # ComfyUI takes one memory mode; a mode of the person's own (--cpu on
+        # a machine with no GPU, --highvram on a big card) replaces ours —
+        # with both, ComfyUI refuses to start at all
         if lowvram:
             # The wrapper's block swap is what keeps the DiT in system RAM;
-            # these keep ComfyUI's own models (the audio models, the VAE)
-            # off the card between uses, and nothing cached between runs.
-            cmd += ["--lowvram", "--cache-none"]
+            # --lowvram keeps ComfyUI's own models (the audio models, the VAE)
+            # off the card between uses. --cache-none frees each window's
+            # frames once the next join has them: measured on a real engine,
+            # without it a 31 s clip held 14 GB of frames and was killed.
+            if not any(a in VRAM_MODES for a in extra):
+                cmd += ["--lowvram"]
+            cmd += ["--cache-none"]
         # ComfyUI sends no step previews unless asked; the live preview in
         # the app (the wrapper's sampler previews each step) needs them
         cmd += ["--preview-method", "auto"]
+        # anything else the person wants ComfyUI started with — --cpu on a
+        # machine with no GPU, --use-sage-attention, a different cache mode
+        cmd += extra
         prog.log("Launching ComfyUI: " + " ".join(cmd))
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) \
             if platform.system() == "Windows" else 0
@@ -1116,14 +1131,20 @@ def engine_lowvram(stats: dict | None) -> bool | None:
     return any(a in ("--lowvram", "--novram") for a in argv)
 
 
-def wait_for_comfy(url: str, timeout: int = 900, on_wait=None) -> bool:
+def wait_for_comfy(url: str, timeout: int = 900, on_wait=None,
+                   alive=None) -> bool:
     """Poll until ComfyUI answers. `on_wait(elapsed, timeout)` runs each pass —
-    there is no percentage to give here, only how long it has been waiting."""
+    there is no percentage to give here, only how long it has been waiting.
+    `alive()`, when given, ends the wait the moment the process has died:
+    an engine that exited on a bad flag is not going to answer in 15 minutes."""
     started = time.time()
     deadline = started + timeout
     while time.time() < deadline:
         if comfy_online(url):
             return True
+        if alive is not None and not alive():
+            time.sleep(1)                # the log needs a moment to land
+            return comfy_online(url)
         if on_wait:
             on_wait(time.time() - started, timeout)
         time.sleep(2)
@@ -1475,7 +1496,12 @@ def run_setup(cfg: dict, prog: Progress, comfy: ComfyProcess,
                            f"{been} so far. The first start is slow.")
 
             prog.track("launch", None, "Waiting for ComfyUI…")
-            if not wait_for_comfy(url, timeout=900, on_wait=waiting):
+            if not wait_for_comfy(url, timeout=900, on_wait=waiting,
+                                  alive=comfy.alive):
+                if not comfy.alive():
+                    raise RuntimeError("ComfyUI stopped while starting. Its "
+                                       "last words:\n"
+                                       + "\n".join(comfy.tail(12)))
                 raise RuntimeError("ComfyUI did not start within 15 minutes.\n"
                                    + "\n".join(comfy.tail(25)))
         prog.finish("launch", url)

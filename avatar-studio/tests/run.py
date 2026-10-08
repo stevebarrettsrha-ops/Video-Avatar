@@ -29,7 +29,9 @@ MODULES = [
     ("units", "the frame maths and the model set, against the workflow's own numbers"),
     ("graph", "the prompts built from ComfyUI's own schema"),
     ("api", "the HTTP surface, end to end against a mock ComfyUI"),
+    ("stress", "fuzzed bodies, concurrency, damaged files, hostile paths"),
     ("ui", "the interface itself, in a browser"),
+    ("real", "a real ComfyUI: its validator, the stitching executed, the app"),
 ]
 
 

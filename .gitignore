@@ -5,3 +5,4 @@ avatar-studio/tests/.inline.js
 avatar-studio/.venv/
 avatar-studio/ComfyUI/
 avatar-studio/comfy-venv/
+tests/.real-out/
