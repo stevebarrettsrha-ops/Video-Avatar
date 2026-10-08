@@ -83,7 +83,10 @@ def _heal(search: bool = False) -> None:
             for line in bootstrap.location_report(cfg):
                 _say("Verified " + line)
     finally:
-        locating.clear()
+        if search:
+            # only the search owns the flag: a quick repair finishing ahead
+            # of a queued search must not read as "search done"
+            locating.clear()
         _locate_lock.release()
 
 
