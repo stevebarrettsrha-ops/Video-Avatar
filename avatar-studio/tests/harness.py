@@ -224,6 +224,7 @@ def studio(comfy_url: str, data: Path, models_dir: Path | None = None,
     return Server([sys.executable, "server.py"], port, "/api/status",
                   env={"AVATAR_STUDIO_PORT": str(port),
                        "AVATAR_STUDIO_NO_BROWSER": "1",
+                       "AVATAR_STUDIO_NO_SEARCH": "1",
                        "AVATAR_STUDIO_DATA": str(data)})
 
 

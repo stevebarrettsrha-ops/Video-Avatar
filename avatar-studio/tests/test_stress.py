@@ -185,6 +185,7 @@ def run(slow: bool = False) -> Suite:
         with Server([_sys.executable, "server.py"], port, "/api/status",
                     env={"AVATAR_STUDIO_PORT": str(port),
                          "AVATAR_STUDIO_NO_BROWSER": "1",
+                         "AVATAR_STUDIO_NO_SEARCH": "1",
                          "AVATAR_STUDIO_DATA": str(data)}) as app:
             st = requests.get(f"{app.url}/api/status", timeout=20).json()
             s.check("a damaged config starts the app on defaults, with setup "
