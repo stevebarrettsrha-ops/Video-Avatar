@@ -213,6 +213,12 @@ def dependencies(cfg: dict, client=None,
                       if installed else "Loaded in ComfyUI.")
         elif not installed:
             state, detail = "missing", node["why"]
+        elif loaded is False and node["id"] == "wrapper" \
+                and client.has("WanVideoModelLoader"):
+            # loaded, but a version from before the LongCat Avatar nodes
+            state = "missing"
+            detail = ("Installed, but this version has no LongCat Avatar "
+                      "nodes — press Update, then restart ComfyUI.")
         elif loaded is False:
             state = "warn"
             detail = ("Installed but ComfyUI has not loaded it — check the "

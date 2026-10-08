@@ -13,29 +13,24 @@ app = Flask(__name__)
 app.json.sort_keys = False
 
 REPOS = {
-    "Comfy-Org/MiniMax-H3": [
-        ("diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
-         2_500_000),
-        ("diffusion_models/minimax_h3_ref2va_pruned_fp8_scaled.safetensors",
-         2_000_000),
-        ("text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
-         3_000_000),
-        ("text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-         2_800_000),
-        ("vae/minimax_h3_video_vae_fp16.safetensors", 900_000),
-        ("vae/minimax_h3_audio_vae_fp32.safetensors", 400_000),
-        ("loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
-         300_000),
-        ("loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
-         300_000),
-        ("vae_approx/taeh3.safetensors", 120_000),
+    "Kijai/LongCat-Video_comfy": [
+        ("Avatar/LongCat-Avatar_comfy_bf16.safetensors", 2_800_000),
+        ("LongCat_distill_lora_alpha64_bf16.safetensors", 300_000),
+        ("LongCat_distill_lora_rank128_bf16.safetensors", 300_000),
         ("README.md", 5_000),
         (".gitattributes", 1_500),
     ],
-    "lightx2v/Minimax-h3-Turbo": [
-        ("minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_bf16.safetensors",
-         320_000),
+    "Kijai/WanVideo_comfy": [
+        ("umt5-xxl-enc-bf16.safetensors", 1_100_000),
+        ("Wan2_1_VAE_bf16.safetensors", 250_000),
         ("README.md", 3_000),
+    ],
+    "Kijai/wav2vec2_safetensors": [
+        ("wav2vec2-chinese-base_fp16.safetensors", 190_000),
+    ],
+    "Kijai/MelBandRoFormer_comfy": [
+        ("MelBandRoformer_fp32.safetensors", 400_000),
+        ("MelBandRoformer_fp16.safetensors", 200_000),
     ],
 }
 

@@ -1,7 +1,7 @@
 @echo off
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
-title MiniMax Studio
+title LongCat Avatar Studio
 
 set "PY="
 rem Test interpreters by running them - Microsoft Store stubs answer `where`

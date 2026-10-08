@@ -814,6 +814,10 @@ class ComfyClient:
         r = requests.post(f"{self.url}/upload/image", files=files,
                           data={"type": "input", "overwrite": "false"}, timeout=600)
         r.raise_for_status()
+        # LoadImage and LoadAudio list ComfyUI/input: the cached schema does
+        # not have this file yet, and a build against it would refuse it
+        with self._lock:
+            self._schema = None
         data = r.json()
         name = data.get("name") or file_storage.filename
         sub = data.get("subfolder") or ""
