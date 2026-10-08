@@ -1,0 +1,440 @@
+"""A stand-in ComfyUI: /object_info shaped like the real one, plus a queue.
+
+The schema in object_info.json is not derived or guessed: it is the real
+/object_info of ComfyUI 0.39 with ComfyUI-WanVideoWrapper (main, with the
+LongCat Avatar nodes), ComfyUI-KJNodes and ComfyUI-MelBandRoFormer loaded,
+cut down to the nodes this app uses. A stand-in that disagrees with the thing
+it stands in for is worth very little, so /prompt validates the way ComfyUI
+does: unknown nodes, unknown inputs, values outside a combo's options,
+missing required inputs (dynamic-combo sub-inputs included, nested ones too)
+and dangling links are all rejected.
+
+Knobs, all environment variables:
+  MOCK_DELAY              seconds a window takes to "render" (default 1)
+  MOCK_FAIL_AFTER         if set, every render ends in a CUDA out-of-memory
+  MOCK_OMIT               comma-separated node classes to pretend not to have
+  MOCK_NO_MELBAND_MODEL   serve no MelBandRoFormer file in the model lists
+  MOCK_BLANK_UNETS        serve an empty WanVideoModelLoader list for the
+                          first N /object_info calls — a ComfyUI that started
+                          before the weights landed and has not rescanned
+  MOCK_COMFY_ROOT         the install dir /system_stats claims via argv
+                          (default none: no argv, like wrappers that hide it)
+"""
+import base64
+import hashlib
+import json
+import os
+import pathlib
+import struct
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+OBJECT_INFO = json.loads(
+    (pathlib.Path(__file__).with_name("object_info.json")).read_text())
+for cls in [c for c in os.environ.get("MOCK_OMIT", "").split(",") if c]:
+    OBJECT_INFO.pop(cls, None)
+if os.environ.get("MOCK_NO_MELBAND_MODEL"):
+    for _cls in ("MelBandRoFormerModelLoader", "WanVideoModelLoader"):
+        if _cls in OBJECT_INFO:
+            _spec = OBJECT_INFO[_cls]["input"]["required"]
+            _key = "model_name" if "model_name" in _spec else "model"
+            _spec[_key][0] = [m for m in _spec[_key][0]
+                              if "melband" not in m.lower()]
+
+DELAY = float(os.environ.get("MOCK_DELAY", "1"))
+BLANK_UNETS = int(os.environ.get("MOCK_BLANK_UNETS", "0"))
+OBJECT_INFO_CALLS = 0
+
+HISTORY: dict = {}
+QUEUE_PENDING: list = []
+QUEUE_RUNNING: list = []
+INTERRUPTS: list = []
+UPLOADS: list = []          # filenames handed to /upload/image
+UPLOAD_BYTES: dict = {}     # filename -> what was uploaded
+PROMPTS: dict = {}          # prompt_id -> the graph as queued
+LOCK = threading.Lock()
+RUN_LOCK = threading.Lock()
+WS_CLIENTS: list = []
+
+# Enough of an MP4 header that mimetypes and players recognise the bytes.
+FAKE_MP4 = b"\x00\x00\x00\x20ftypisom\x00\x00\x02\x00isomiso2mp41" + b"\x00" * 256
+
+# The browser tests need a clip a browser can actually decode. There is no
+# encoder here, so a test records one itself (canvas.captureStream +
+# MediaRecorder) and POSTs it to /testvideo; from then on every render is
+# served as that webm. Without it, renders are FAKE_MP4 — header-only bytes,
+# fine for the API tests, undecodable by design.
+FLAKY = [0]                 # /history replies still to drop (POST /flaky)
+TEST_VIDEO: list = []       # [bytes] once a test has posted one
+
+
+def _object_info():
+    """The schema, with everything uploaded so far visible to LoadImage and
+    LoadVideo — the real server rescans its input folder the same way. The
+    first MOCK_BLANK_UNETS calls hide the diffusion models, reproducing a
+    ComfyUI that started before the weights landed: the real one scans its
+    model folders once, at startup, and only a restart rescans them."""
+    global OBJECT_INFO_CALLS
+    out = json.loads(json.dumps(OBJECT_INFO))
+    with LOCK:
+        names = list(UPLOADS)
+        OBJECT_INFO_CALLS += 1
+        withhold = OBJECT_INFO_CALLS <= BLANK_UNETS
+    # the real server lists ComfyUI/input under both loaders: LoadImage
+    # classic-style, LoadAudio as a V3 combo
+    if "LoadImage" in out:
+        out["LoadImage"]["input"]["required"]["image"][0] = \
+            [n for n in names if not n.lower().endswith(AUDIO_EXT)] or ["example.png"]
+    if "LoadAudio" in out:
+        out["LoadAudio"]["input"]["required"]["audio"][1]["options"] = \
+            [n for n in names if n.lower().endswith(AUDIO_EXT)]
+    if withhold and "WanVideoModelLoader" in out:
+        out["WanVideoModelLoader"]["input"]["required"]["model"][0] = [
+            m for m in out["WanVideoModelLoader"]["input"]["required"]["model"][0]
+            if "longcat" not in m.lower()]
+    return out
+
+
+AUDIO_EXT = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".webm", ".opus")
+
+
+def _png(shade: int) -> bytes:
+    """A real 8x8 grey PNG — enough for a browser to decode and show."""
+    import zlib
+
+    def chunk(kind, body):
+        return (struct.pack(">I", len(body)) + kind + body
+                + struct.pack(">I", zlib.crc32(kind + body) & 0xffffffff))
+    rows = b"".join(b"\x00" + bytes([shade % 256]) * 8 for _ in range(8))
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", 8, 8, 8, 0, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+def ws_preview(pid, node, step):
+    """A PREVIEW_IMAGE_WITH_METADATA frame, laid out as ComfyUI sends it."""
+    meta = json.dumps({"node_id": node, "prompt_id": pid,
+                       "display_node_id": node, "image_type": "image/png"}
+                      ).encode()
+    ws_send(struct.pack(">I", 4) + struct.pack(">I", len(meta)) + meta
+            + _png(40 + step * 30), binary=True)
+
+
+def ws_send(obj, binary=False):
+    """One unmasked frame to every connected /ws client — text, or binary."""
+    data = obj if binary else json.dumps(obj).encode()
+    head = bytearray([0x82 if binary else 0x81])
+    if len(data) < 126:
+        head.append(len(data))
+    else:
+        head += bytes([126]) + struct.pack(">H", len(data))
+    frame = bytes(head) + data
+    with LOCK:
+        for sock in WS_CLIENTS[:]:
+            try:
+                sock.sendall(frame)
+            except OSError:
+                WS_CLIENTS.remove(sock)
+
+
+def execute(pid, graph):
+    with RUN_LOCK:                      # one prompt at a time, like the real queue
+        with LOCK:
+            if pid not in QUEUE_PENDING:
+                return
+            QUEUE_PENDING.remove(pid)
+            QUEUE_RUNNING.append(pid)
+        _execute(pid, graph)
+
+
+def _execute(pid, graph):
+    ws_send({"type": "execution_start", "data": {"prompt_id": pid}})
+    # every node announced as it starts, as ComfyUI does; samplers carry the
+    # progress steps, and "executing" None marks the end
+    samplers = [n for n, v in graph.items()
+                if v["class_type"] == "WanVideoSamplerv2"]
+    steps = max(1, int(DELAY * 2))
+    for nid in sorted(graph, key=lambda n: int(n) if str(n).isdigit() else 0):
+        ws_send({"type": "executing",
+                 "data": {"node": nid, "prompt_id": pid}})
+        if nid in samplers:
+            for i in range(steps):
+                time.sleep(DELAY / steps)
+                ws_send({"type": "progress",
+                         "data": {"value": i + 1, "max": steps,
+                                  "prompt_id": pid, "node": nid}})
+                # --preview-method auto: the wrapper sends a frame a step
+                ws_preview(pid, nid, i)
+                with LOCK:
+                    if pid in INTERRUPTS:
+                        break
+    if not samplers:
+        time.sleep(DELAY)
+    with LOCK:
+        interrupted = pid in INTERRUPTS
+    if os.environ.get("MOCK_FAIL_AFTER"):
+        status = {"status_str": "error", "messages": [
+            ["execution_error", {"node_type": "WanVideoSamplerv2",
+                                 "exception_message": "CUDA out of memory"}]]}
+        outputs = {}
+    elif interrupted:
+        status = {"status_str": "error", "messages": [
+            ["execution_interrupted", {"node_type": "WanVideoSamplerv2",
+                                       "exception_message": "interrupted"}]]}
+        outputs = {}
+    else:
+        status = {"status_str": "success", "messages": []}
+        outputs = {}
+        with LOCK:
+            ext = ".webm" if TEST_VIDEO else ".mp4"
+        for nid, node in graph.items():
+            if node["class_type"] == "SaveVideo":
+                prefix = node["inputs"].get("filename_prefix", "video/ComfyUI")
+                outputs[nid] = {"images": [{
+                    "filename": f"{prefix.split('/')[-1]}_{pid}{ext}",
+                    "subfolder": "video", "type": "output"}]}
+    with LOCK:
+        QUEUE_RUNNING.remove(pid)
+        HISTORY[pid] = {"status": status, "outputs": outputs}
+    ws_send({"type": "executing", "data": {"node": None, "prompt_id": pid}})
+    ws_send({"type": "execution_success" if status["status_str"] == "success"
+             else "execution_error", "data": {"prompt_id": pid}})
+
+
+def validate(graph):
+    """Reject anything ComfyUI itself would reject."""
+    info_all = _object_info()
+    errs = {}
+    for nid, node in graph.items():
+        cls = node["class_type"]
+        info = info_all.get(cls)
+        if not info:
+            errs[nid] = {"class_type": cls, "errors": [
+                {"message": "Node not found", "details": cls}]}
+            continue
+        spec = dict(info["input"].get("required", {}))
+        spec.update(info["input"].get("optional", {}))
+        required = [n for n in (info["input"].get("required") or {})]
+        # V3 dynamic combos: the chosen option's inputs arrive as
+        # "<combo>.<sub>" and its required ones must be there — and a sub
+        # input can be a dynamic combo itself (SaveVideo's format.codec)
+        pending = [(n, d) for n, d in spec.items()]
+        while pending:
+            name, d = pending.pop()
+            if not (isinstance(d[0], str) and d[0].startswith("COMFY_DYNAMICCOMBO")):
+                continue
+            for opt in (d[1] or {}).get("options", []):
+                if opt["key"] != node["inputs"].get(name):
+                    continue
+                ins = opt.get("inputs") or {}
+                for sub, sd in (ins.get("required") or {}).items():
+                    spec[f"{name}.{sub}"] = sd
+                    required.append(f"{name}.{sub}")
+                    pending.append((f"{name}.{sub}", sd))
+                for sub, sd in (ins.get("optional") or {}).items():
+                    spec[f"{name}.{sub}"] = sd
+                    pending.append((f"{name}.{sub}", sd))
+        node_errs = []
+        for name, value in node["inputs"].items():
+            if name == "control_after_generate":
+                continue
+            if name not in spec:
+                node_errs.append({"message": "Unknown input", "details": name})
+                continue
+            kind = spec[name][0]
+            if isinstance(value, list) and len(value) == 2 \
+                    and isinstance(value[1], int):
+                if str(value[0]) not in graph:
+                    node_errs.append({"message": "Link to a node that is not "
+                                      "in the prompt", "details": f"{name}={value}"})
+                continue
+            if isinstance(kind, list):
+                if value not in kind:
+                    node_errs.append({"message": "Value not in list",
+                                      "details": f"{name}: {value!r}"})
+            elif isinstance(kind, str) and kind.upper().startswith(
+                    ("COMBO", "COMFY_DYNAMICCOMBO")):
+                opts = (spec[name][1] if len(spec[name]) > 1 else {}) or {}
+                options = opts.get("options")
+                if options and isinstance(options[0], dict):
+                    options = [o.get("key") for o in options]
+                # an empty list is a real answer: LoadAudio with nothing
+                # uploaded accepts no file at all
+                if options is not None and value not in options:
+                    node_errs.append({"message": "Value not in list",
+                                      "details": f"{name}: {value!r}"})
+            elif kind == "INT" and not isinstance(value, int):
+                node_errs.append({"message": "Wrong type", "details": f"{name} INT"})
+            elif kind == "FLOAT" and not isinstance(value, (int, float)):
+                node_errs.append({"message": "Wrong type", "details": f"{name} FLOAT"})
+            elif kind == "STRING" and not isinstance(value, str):
+                node_errs.append({"message": "Wrong type", "details": f"{name} STRING"})
+            elif kind == "BOOLEAN" and not isinstance(value, bool):
+                node_errs.append({"message": "Wrong type", "details": f"{name} BOOLEAN"})
+        for name in required:
+            if name != "control_after_generate" and name not in node["inputs"]:
+                node_errs.append({"message": "Required input is missing",
+                                  "details": name})
+        if node_errs:
+            errs[nid] = {"class_type": cls, "errors": node_errs}
+    return errs
+
+
+class H(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *a):
+        pass
+
+    def _send(self, code, body, ctype="application/json"):
+        raw = body if isinstance(body, bytes) else json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def do_GET(self):
+        p = self.path.split("?")[0]
+        if p == "/ws":
+            key = self.headers.get("Sec-WebSocket-Key", "")
+            accept = base64.b64encode(hashlib.sha1(
+                (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()
+            ).digest()).decode()
+            self.send_response(101, "Switching Protocols")
+            self.send_header("Upgrade", "websocket")
+            self.send_header("Connection", "Upgrade")
+            self.send_header("Sec-WebSocket-Accept", accept)
+            self.end_headers()
+            with LOCK:
+                WS_CLIENTS.append(self.connection)
+            try:
+                while self.connection.recv(1024):
+                    pass
+            except OSError:
+                pass
+            self.close_connection = True
+            return
+        if p == "/object_info":
+            self._send(200, _object_info())
+        elif p == "/system_stats":
+            system = {"comfyui_version": "0.3.75",
+                      "ram_total": 34_000_000_000, "ram_free": 20_000_000_000}
+            root = os.environ.get("MOCK_COMFY_ROOT", "")
+            if root:
+                system["argv"] = [f"{root}/main.py"] + os.environ.get(
+                    "MOCK_COMFY_FLAGS", "").split()
+            with LOCK:
+                busy = bool(QUEUE_RUNNING)
+            # an RTX 4060 as torch reports it; busier while rendering
+            self._send(200, {"system": system, "devices": [{
+                "name": "cuda:0 NVIDIA GeForce RTX 4060 : cudaMallocAsync",
+                "type": "cuda", "vram_total": 8_585_216_000,
+                "vram_free": 1_000_000_000 if busy else 7_500_000_000}]})
+        elif p.startswith("/history/") and FLAKY[0] > 0:
+            FLAKY[0] -= 1                 # a reply that never comes back
+            self.close_connection = True
+            self.connection.shutdown(2)
+            return
+        elif p.startswith("/history/"):
+            pid = p.rsplit("/", 1)[-1]
+            with LOCK:
+                self._send(200, {pid: HISTORY[pid]} if pid in HISTORY else {})
+        elif p == "/view" and "type=input" in self.path:
+            from urllib.parse import parse_qs, urlsplit
+            q = parse_qs(urlsplit(self.path).query)
+            name = (q.get("filename") or [""])[0]
+            with LOCK:
+                body = UPLOAD_BYTES.get(name)
+            if body is None:
+                self._send(404, {"error": "no such input"})
+            else:
+                import mimetypes
+                self._send(200, body, mimetypes.guess_type(name)[0]
+                           or "application/octet-stream")
+        elif p == "/view":
+            with LOCK:
+                real = TEST_VIDEO[0] if TEST_VIDEO else None
+            if real:
+                self._send(200, real, "video/webm")
+            else:
+                self._send(200, FAKE_MP4, "video/mp4")
+        elif p == "/queue":
+            with LOCK:
+                self._send(200, {
+                    "queue_running": [[0, pid, {}, {}, []] for pid in QUEUE_RUNNING],
+                    "queue_pending": [[0, pid, {}, {}, []] for pid in QUEUE_PENDING]})
+        elif p == "/prompts":            # test-only: what was queued
+            with LOCK:
+                self._send(200, PROMPTS)
+        else:
+            self._send(404, {"error": "no route " + p})
+
+    def do_POST(self):
+        p = self.path.split("?")[0]
+        n = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(n) if n else b""
+        if p == "/prompt":
+            graph = json.loads(raw)["prompt"]
+            bad = validate(graph)
+            if bad:
+                self._send(400, {"error": {
+                    "type": "prompt_outputs_failed_validation",
+                    "message": "Prompt outputs failed validation", "details": ""},
+                    "node_errors": bad})
+                return
+            with LOCK:
+                pid = f"pid{len(PROMPTS) + 1}"
+                PROMPTS[pid] = graph
+                QUEUE_PENDING.append(pid)
+            threading.Thread(target=execute, args=(pid, graph),
+                             daemon=True).start()
+            self._send(200, {"prompt_id": pid, "number": 1, "node_errors": {}})
+        elif p == "/interrupt":
+            with LOCK:
+                INTERRUPTS.extend(QUEUE_RUNNING)
+            self._send(200, {})
+        elif p == "/queue":
+            body = json.loads(raw or b"{}")
+            with LOCK:
+                for pid in body.get("delete", []):
+                    if pid in QUEUE_PENDING:     # as ComfyUI: gone, no history
+                        QUEUE_PENDING.remove(pid)
+            self._send(200, {})
+        elif p == "/flaky":              # test-only: drop the next N /history
+            FLAKY[0] = int(json.loads(raw or b"{}").get("history", 0))
+            self._send(200, {"flaky": FLAKY[0]})
+        elif p == "/delay":              # test-only: render speed from now on
+            global DELAY
+            DELAY = float(json.loads(raw or b"{}").get("seconds", DELAY))
+            self._send(200, {"delay": DELAY})
+        elif p == "/testvideo":
+            with LOCK:
+                TEST_VIDEO[:] = [raw]
+            self._send(200, {"ok": True, "bytes": len(raw)})
+        elif p == "/upload/image":
+            # good enough multipart parsing for a stand-in: the filename field
+            marker = b'filename="'
+            i = raw.find(marker)
+            name = raw[i + len(marker):raw.index(b'"', i + len(marker))].decode() \
+                if i >= 0 else "upload.bin"
+            body = b""
+            if i >= 0:
+                start = raw.index(b"\r\n\r\n", i) + 4
+                boundary = raw[:raw.index(b"\r\n")]
+                end = raw.find(b"\r\n" + boundary, start)
+                body = raw[start:end if end >= 0 else len(raw)]
+            with LOCK:
+                if name not in UPLOADS:
+                    UPLOADS.append(name)
+                UPLOAD_BYTES[name] = body
+            self._send(200, {"name": name, "subfolder": "", "type": "input"})
+        else:
+            self._send(404, {"error": "no route " + p})
+
+
+if __name__ == "__main__":
+    import sys
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8188
+    ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
