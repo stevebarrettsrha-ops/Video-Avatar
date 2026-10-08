@@ -2507,5 +2507,135 @@
   "category": "image/batch",
   "output_node": false,
   "python_module": "comfy_extras.nodes_images"
+ },
+ "LoadVideo": {
+  "input": {
+   "required": {
+    "file": [
+     "COMBO",
+     {
+      "multiselect": false,
+      "options": [],
+      "video_upload": true
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "file"
+   ]
+  },
+  "output": [
+   "VIDEO"
+  ],
+  "output_name": [
+   "VIDEO"
+  ],
+  "name": "LoadVideo",
+  "display_name": "Load Video",
+  "category": "video",
+  "output_node": false,
+  "python_module": "comfy_extras.nodes_video"
+ },
+ "GetVideoComponents": {
+  "input": {
+   "required": {
+    "video": [
+     "VIDEO",
+     {
+      "tooltip": "The video to extract components from."
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "video"
+   ]
+  },
+  "output": [
+   "IMAGE",
+   "AUDIO",
+   "FLOAT",
+   "COMBO",
+   "COMBO"
+  ],
+  "output_name": [
+   "images",
+   "audio",
+   "fps",
+   "bit_depth",
+   "color_space"
+  ],
+  "name": "GetVideoComponents",
+  "display_name": "Get Video Components",
+  "category": "video",
+  "output_node": false,
+  "python_module": "comfy_extras.nodes_video"
+ },
+ "ImageBatch": {
+  "input": {
+   "required": {
+    "image1": [
+     "IMAGE"
+    ],
+    "image2": [
+     "IMAGE"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "image1",
+    "image2"
+   ]
+  },
+  "output": [
+   "IMAGE"
+  ],
+  "output_name": [
+   "IMAGE"
+  ],
+  "name": "ImageBatch",
+  "display_name": "Batch Images (DEPRECATED)",
+  "category": "image/batch",
+  "output_node": false,
+  "python_module": "nodes"
+ },
+ "RepeatImageBatch": {
+  "input": {
+   "required": {
+    "image": [
+     "IMAGE",
+     {}
+    ],
+    "amount": [
+     "INT",
+     {
+      "default": 1,
+      "min": 1,
+      "max": 4096
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "image",
+    "amount"
+   ]
+  },
+  "output": [
+   "IMAGE"
+  ],
+  "output_name": [
+   "IMAGE"
+  ],
+  "name": "RepeatImageBatch",
+  "display_name": "Repeat Image Batch",
+  "category": "image/batch",
+  "output_node": false,
+  "python_module": "comfy_extras.nodes_images"
  }
 }

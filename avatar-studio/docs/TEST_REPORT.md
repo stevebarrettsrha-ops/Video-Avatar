@@ -1,16 +1,16 @@
 # Test report — LongCat Avatar Studio
 
-**Result: 237 of 237 checks pass** (`python tests/run.py`, 97 s).
+**Result: 267 of 267 checks pass** (`python tests/run.py`, 334 s with the real engine).
 
 | Suite | Checks | What it proves |
 |---|---:|---|
 | gate | 5 | Every module compiles; the page's script parses; every id the script uses exists; every button, chip and slider has a listener; `run.sh` parses. |
-| units | 48 | Frame and window maths read from kijai's workflow file. The page's copy of the maths gives the same answers. The weight set and folders; the preflight verdicts; the RAM estimate; how ComfyUI is launched. |
-| graph | 58 | The graphs `comfy.py` builds, against the real node schema: window wiring, seams, audio routing, every setting, and the fallbacks for missing optional parts. |
-| api | 50 | The server end to end: uploads, validation, two-window renders with per-window progress, seeds, cancel, delete, the localhost guard, the preflight, the dependency list, a full set download, and stale or old engines. |
+| units | 52 | Frame and window maths read from kijai's workflow file. The page's copy of the maths gives the same answers. The weight set and folders; the preflight verdicts; the RAM estimate; how ComfyUI is launched. |
+| graph | 73 | The graphs `comfy.py` builds, against the real node schema: window wiring, seams, audio routing, every setting, and the fallbacks for missing optional parts. |
+| api | 59 | The server end to end: uploads, validation, two-window renders with per-window progress, seeds, cancel, delete, the localhost guard, the preflight, the dependency list, a full set download, and stale or old engines. |
 | stress | 20 | 400 fuzzed requests, 12 concurrent renders, parallel uploads and deletes, hostile paths, and damaged gallery/config files. |
 | ui | 25 | The page in Chromium: picture and speech, trimming, the plan line, the RAM warning, settings, generate, the lightbox, reuse, **recording from a (fake) microphone**, a draft surviving a reload, and every page. |
-| real | 31 | **A real ComfyUI 0.39** with the three node packs. Details below. |
+| real | 33 | **A real ComfyUI 0.39** with the three node packs. Details below. |
 
 ## Against a real ComfyUI
 
@@ -69,21 +69,34 @@ install updated it in place in 13 seconds.
    node schema did not list it yet. Uploads now refresh it.
 5. **An old WanVideoWrapper (from before LongCat) was reported as "IMPORT
    FAILED"**. It now says to press Update.
-6. **The empty-feed message was split across grid columns**, and the Seed
+6. **Long clips needed more RAM than 32 GB** (above). They are now rendered
+   in parts and joined, with no length limit.
+7. **The empty-feed message was split across grid columns**, and the Seed
    row read "Random / Random". Both are fixed.
 
-## A limit the testing measured: RAM for long clips
+## No length limit: long clips in parts
 
-The decoded frames are float32. While windows are joined, about four copies
-are alive at once. On the real engine, 500 frames at 832×480 peaked at
-9.3 GB above idle (the app's estimate: 9.6 GB).
+The first round of testing measured how much memory the frames need. They
+are float32, and about four copies are alive while windows are joined:
+500 frames at 832×480 peaked at 9.3 GB. In one graph, two minutes would need
+about 36 GB, and a 31 s single graph was in fact killed for lack of memory.
 
-- **Without `--cache-none`,** a 31 s clip held about 14 GB and was killed.
-  The app always launches with it.
-- **With 32 GB of RAM and the fp8 model resident,** about 12 GB is left for
-  frames. That is roughly **42 s at 480p, or 18 s at 720p**, per clip. The
-  Create page shows the estimate for every clip, and warns with the part
-  length to use when it is over.
+So a long clip is now rendered in **parts** (two windows at 480p, one at
+720p, about 3–4 GB of frames each). Each part is its own ComfyUI job that
+continues from the last 13 frames of the part before. `assemble.py` then
+joins the parts one frame at a time and lays the original soundtrack under
+them. Verified on the real engine, with the real app (`AVATAR_REHEARSAL=1`
+swaps only the diffusion for stand-in frames):
+
+| Clip | Parts | Joined file | Audio | ComfyUI peak |
+|---|---|---|---|---|
+| 30 s | 3 | exactly 480 frames, 16 fps | 30.000 s | 4.76 GB |
+| 5 min | 30 | exactly 4,800 frames, 16 fps | 300.000 s | 5.60 GB |
+
+Ten times the length, the same memory. The app itself stayed at about
+250 MB while joining. Clips can now be up to an hour long, and length costs
+time, not memory. (Both peaks include about 4 GB still cached from the
+test's earlier sections.)
 
 ## What could not be tested here
 
@@ -105,6 +118,7 @@ output.
 | 09–10 | Recording from the microphone, and the recording kept as speech |
 | 11 | Rendering: "Window 2 of 3 · step 4 of 12" |
 | 12–14 | The finished clip in the feed, in the lightbox, in the Library |
-| 15–16 | The RAM warning for 2 min at 720p, and a 40 s part that fits |
+| 15 | Ten minutes of speech planned: 120 windows in 60 parts, the same 3.1 GB as any length |
+| 16, 16b, 16c | A two-minute render at "part 3 of 12"; joining the 12 parts; the finished clip ("Rendered in 12 parts") |
 | 17 | Phone width |
 | 18–19 | An out-of-memory render explained; an engine missing the LongCat nodes |

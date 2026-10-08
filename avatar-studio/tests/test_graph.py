@@ -82,7 +82,7 @@ def run(slow: bool = False) -> Suite:
                 and not nodes_of(g, "ReplaceVideoLatentFrames"))
 
         # -- the workflow's own shape: three windows ------------------------
-        built = client.build({**BASE, "audio_seconds": 12.5})
+        built = client.build({**BASE, "audio_seconds": 12.5, "windows_per_part": 3})
         g = built["prompt"]
         client.queue(g)
         s.check("ComfyUI accepts a three-window clip", True)
@@ -128,6 +128,90 @@ def run(slow: bool = False) -> Suite:
                 any(n["inputs"]["start_index"] == 0
                     and n["inputs"]["images"] == [cats[-1][0], 2]
                     for _, n in last))
+
+        # -- a long clip: rendered in parts ---------------------------------
+        upload(mock.url, "prev_part.mp4")
+        lay = comfy.plan(30, "832x480")
+        s.equal("30 s at 480p is 6 windows in 3 parts of 2",
+                ([p["windows"] for p in lay["parts"]], lay["windows"]),
+                ([2, 2, 2], 6))
+        built = {k: client.build({**BASE, "audio_seconds": 30}, part=k,
+                                 prev_video="" if k == 0 else "prev_part.mp4")
+                 for k in range(3)}
+        for k, b in built.items():
+            client.queue(b["prompt"])
+        s.check("ComfyUI accepts every part", True)
+        g0, g1, g2 = (built[k]["prompt"] for k in range(3))
+        s.check("part 0 starts from the picture and loads no video",
+                not nodes_of(g0, "LoadVideo")
+                and [n["inputs"]["frames_processed"]
+                     for _, n in nodes_of(g0, comfy.EXTEND)] == [0, 93])
+        lv = nodes_of(g1, "LoadVideo")
+        s.check("part 1 loads part 0's video and takes its last 13 frames",
+                len(lv) == 1 and lv[0][1]["inputs"]["file"] == "prev_part.mp4"
+                and any(n["inputs"]["start_index"] == -1
+                        and n["inputs"]["num_frames"] == 13
+                        for _, n in nodes_of(g1, "GetImageRangeFromBatch")))
+        ext1 = [n["inputs"] for _, n in nodes_of(g1, comfy.EXTEND)]
+        enc_prev = next(k for k, n in g1.items()
+                        if n["class_type"] == "WanVideoEncode"
+                        and n["inputs"]["image"][0] != "11")
+        s.check("its first window continues from those frames, re-encoded, "
+                "with the picture as the anchor (overlap 13)",
+                ext1[0]["prev_latents"] == [enc_prev, 0]
+                and ext1[0]["overlap"] == 13
+                and ext1[0]["ref_latent"] == [nodes_of(g1, "WanVideoEncode")[0][0], 0])
+        s.equal("and reads its audio from the start of its own slice "
+                "(frames_processed 13, then 93)",
+                [e["frames_processed"] for e in ext1], [13, 93])
+        t0, t1, t2 = (nodes_of(g, "TrimAudioDuration")[0][1]["inputs"]
+                      for g in (g0, g1, g2))
+        s.equal("each part's audio slice starts 13 frames before its first "
+                "new frame: 0 s, 10 s, 20 s",
+                (t0["start_index"], t1["start_index"], t2["start_index"]),
+                (0.0, 10.0, 20.0))
+        s.equal("the windows keep their place in the clip: seeds and the "
+                "progress map count across parts",
+                (sorted(built[1]["samplers"].values()),
+                 [n["inputs"]["seed"] for _, n in nodes_of(g1, comfy.SAMPLER)]),
+                ([2, 3], [9, 10]))
+        cut = [n["inputs"] for _, n in nodes_of(g1, "GetImageRangeFromBatch")
+               if n["inputs"]["start_index"] == 13]
+        s.check("a part keeps only its new frames: the first window drops the "
+                "13 it shares with the part before", len(cut) == 1
+                and cut[0]["num_frames"] == 80)
+        s.check("parts carry no audio: the joiner lays the soundtrack under "
+                "the whole clip in one piece",
+                all("audio" not in nodes_of(g, "CreateVideo")[0][1]["inputs"]
+                    for g in (g0, g1, g2)))
+        sv = nodes_of(g1, "SaveVideo")[0][1]["inputs"]
+        s.check("parts are saved near-lossless (h264 re-encode at crf 10) "
+                "through SaveVideo's nested options",
+                sv.get("format") == "mp4" and sv.get("format.codec") == "h264"
+                and sv.get("format.codec.encoding") == "re-encode"
+                and sv.get("format.codec.encoding.crf") == 10.0, str(sv))
+        last = [n["inputs"] for _, n in nodes_of(g2, "GetImageRangeFromBatch")
+                if n["inputs"]["start_index"] == 0]
+        s.check("only the last part is trimmed to the speech (147 frames)",
+                len(last) == 1 and last[0]["num_frames"] == 147
+                and not [n for _, n in nodes_of(g1, "GetImageRangeFromBatch")
+                         if n["inputs"]["start_index"] == 0])
+        s.fails_with("a later part without the one before is refused",
+                     lambda: client.build({**BASE, "audio_seconds": 30}, part=1),
+                     ComfyError, "part before")
+        s.fails_with("a part past the end is refused",
+                     lambda: client.build({**BASE, "audio_seconds": 30}, part=3,
+                                          prev_video="prev_part.mp4"),
+                     ComfyError, "3 parts")
+        client.rehearsal = True
+        reh = client.build({**BASE, "audio_seconds": 30}, part=1,
+                           prev_video="prev_part.mp4")["prompt"]
+        client.rehearsal = False
+        client.queue(reh)
+        s.check("the rehearsal graph (no model, stand-in frames) is accepted "
+                "and still loads the previous part",
+                not nodes_of(reh, comfy.SAMPLER) and nodes_of(reh, "LoadVideo")
+                and nodes_of(reh, "ImageBatch"))
 
         # -- the audio half -------------------------------------------------
         trim_audio = nodes_of(g, "TrimAudioDuration")[0]

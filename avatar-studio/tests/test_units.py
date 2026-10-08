@@ -68,8 +68,8 @@ def run(slow: bool = False) -> Suite:
     s.equal("173 frames is exactly two windows", comfy.window_count(173), 2)
     s.equal("174 frames is three", comfy.window_count(174), 3)
     s.equal("three windows render 253 frames", comfy.rendered_frames(3), 253)
-    s.equal("the two-minute cap is 24 windows",
-            comfy.window_count(comfy.frame_count(comfy.MAX_SECONDS)), 24)
+    s.equal("two minutes is 24 windows",
+            comfy.window_count(comfy.frame_count(120)), 24)
     for sec in (0.5, 3, 5.8, 5.9, 10.81, 11, 30, 60, 120):
         f = comfy.frame_count(sec)
         w = comfy.window_count(f)
@@ -111,14 +111,21 @@ def run(slow: bool = False) -> Suite:
                 {k: tuple(v) for k, v in sizes.items()}, comfy.SIZES)
         fns_ram = consts_js + re.search(r"var FRAME_COPIES.*?\n", script).group(0) \
             + re.search(r"function frameRam\(.*?\n", script).group(0) \
-            + re.search(r"function framesFitting\(.*?\n}\n", script, re.S).group(0)
+            + re.search(r"function framesFitting\(.*?\n}\n", script, re.S).group(0) \
+            + re.search(r"function windowsPerPart\(.*?\n}\n", script, re.S).group(0)
         probe = fns_ram + "console.log(JSON.stringify([frameRam(500,832,480)," \
-            "framesFitting(832,480),framesFitting(1280,720)]))"
+            "framesFitting(832,480),framesFitting(1280,720)," \
+            "windowsPerPart(832,480),windowsPerPart(1280,720)," \
+            "windowsPerPart(640,640),windowsPerPart(480,832)]))"
         got = json.loads(subprocess.run(["node", "-e", probe], capture_output=True,
                                         text=True).stdout or "null")
         s.equal("the page's RAM estimate matches Python's", got,
                 [comfy.frame_ram(500, 832, 480), comfy.frames_fitting(832, 480),
-                 comfy.frames_fitting(1280, 720)])
+                 comfy.frames_fitting(1280, 720),
+                 comfy.windows_per_part(832, 480),
+                 comfy.windows_per_part(1280, 720),
+                 comfy.windows_per_part(640, 640),
+                 comfy.windows_per_part(480, 832)])
         neg = re.search(r'var DEFAULT_NEGATIVE = (.*?);\n', script, re.S).group(1)
         neg_text = subprocess.run(["node", "-e", f"console.log({neg})"],
                                   capture_output=True, text=True).stdout.strip()
@@ -131,11 +138,45 @@ def run(slow: bool = False) -> Suite:
     s.check("the RAM estimate is within 10% of the real measurement",
             abs(comfy.frame_ram(500, 832, 480) - measured) / measured < 0.1,
             f"{comfy.frame_ram(500, 832, 480)/1e9:.2f} GB vs 9.32 GB")
-    s.check("at 480p, ~42 s fits the 12 GB frame budget; 720p ~18 s",
-            40 <= comfy.frames_fitting(832, 480) / comfy.FPS < 45
-            and 16 <= comfy.frames_fitting(1280, 720) / comfy.FPS < 20,
-            f"{comfy.frames_fitting(832, 480)/16:.1f} s, "
-            f"{comfy.frames_fitting(1280, 720)/16:.1f} s")
+    s.equal("a part holds 2 windows at 480p and 1 at 720p",
+            (comfy.windows_per_part(832, 480), comfy.windows_per_part(1280, 720)),
+            (2, 1))
+    for size in comfy.SIZES:
+        w, h = comfy.SIZES[size]
+        per = comfy.windows_per_part(w, h)
+        if comfy.frame_ram(comfy.WINDOW + (per - 1) * comfy.STEP, w, h) \
+                > comfy.PART_BUDGET:
+            s.check(f"{size}: a part fits its 4 GB budget", False)
+            break
+    else:
+        s.check("at every size a part's frames fit the 4 GB budget", True)
+    for sec in (0.5, 5.8, 10.8, 10.9, 30, 61.3, 120, 600, 3600):
+        for size in ("832x480", "1280x720"):
+            lay = comfy.plan(sec, size)
+            ps = lay["parts"]
+            ok = (sum(p["frames"] for p in ps) == lay["frames"]
+                  and sum(p["windows"] for p in ps) == lay["windows"]
+                  and all(p["windows"] <= lay["per_part"] for p in ps)
+                  and all(not p["trim"] for p in ps[:-1])
+                  and [p["first"] for p in ps]
+                  == list(range(0, lay["windows"], lay["per_part"]))
+                  and all(ps[i]["start_frame"] == sum(q["frames"] for q in ps[:i])
+                          for i in range(len(ps))))
+            if not ok:
+                s.check(f"{sec} s at {size}: parts add up to the clip", False,
+                        str(ps)[:300])
+                break
+        else:
+            continue
+        break
+    else:
+        s.check("for every length up to an hour, the parts' frames add up "
+                "to exactly the clip, and only the last is trimmed", True)
+    s.equal("an hour at 480p is 720 windows in 360 parts",
+            (comfy.plan(3600)["windows"], len(comfy.plan(3600)["parts"])),
+            (720, 360))
+    s.equal("a short clip is one part — no joining at all",
+            len(comfy.plan(10.8)["parts"]), 1)
     s.equal("the server's negative prompt is the workflow's",
             comfy.DEFAULT_NEGATIVE,
             widgets(wf, "WanVideoTextEncodeCached")[0][3])
@@ -198,14 +239,14 @@ def run(slow: bool = False) -> Suite:
         return (tmp / "argv.txt").read_text(), _time.time() - began, up
     try:
         argv, took, up = launch("")
-        s.check("the engine starts in low-VRAM mode, cache off, previews on",
-                "--lowvram" in argv and "--cache-none" in argv
+        s.check("the engine starts in low-VRAM mode with previews, and its "
+                "cache on (it keeps the model loaded from part to part)",
+                "--lowvram" in argv and "--cache-none" not in argv
                 and "--preview-method auto" in argv, argv)
         argv, took, up = launch("--cpu")
         s.check("a memory mode of the person's own replaces --lowvram "
                 "(ComfyUI refuses both)",
-                "--cpu" in argv and "--lowvram" not in argv
-                and "--cache-none" in argv, argv)
+                "--cpu" in argv and "--lowvram" not in argv, argv)
         argv, _, _ = launch("--use-sage-attention")
         s.check("other flags ride along beside low-VRAM mode",
                 "--use-sage-attention" in argv and "--lowvram" in argv, argv)

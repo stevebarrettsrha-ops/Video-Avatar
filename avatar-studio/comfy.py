@@ -56,7 +56,9 @@ AUDIO_FPS = 32
 WINDOW = 93              # frames per window, as in the workflow
 OVERLAP = 13             # frames each window re-uses from the one before
 STEP = WINDOW - OVERLAP  # new frames each extra window adds
-MAX_SECONDS = 120.0
+# Long speech is rendered in parts (see plan()), so length costs time, not
+# memory: an hour is a sanity bound, not a resource one.
+MAX_SECONDS = 3600.0
 
 # Output sizes. Every one divides by 16, which ImageResizeKJv2 is asked for
 # and the Wan VAE needs. 480p is what the workflow ships with and what an
@@ -100,12 +102,12 @@ def window_count(frames: int) -> int:
 
 # Decoded frames are float32 RGB, and while the windows are joined about four
 # copies of the batch are alive at once. Measured on a real ComfyUI running
-# the app's own joins with --cache-none: 500 frames at 832x480 peaked 9.3 GB
-# above idle, 18.6 MB a frame, 3.9 frame-sized copies.
+# the app's own joins: 500 frames at 832x480 peaked 9.3 GB above idle,
+# 18.6 MB a frame, 3.9 frame-sized copies. One graph for a whole clip would
+# need that for every frame of it — two minutes at 480p is ~36 GB — so a
+# long clip is rendered in parts, each holding PART_BUDGET of frames at most.
 FRAME_COPIES = 4
-# What the frames may take beside the fp8 model (~14 GB, offloaded to RAM)
-# and the OS on a 32 GB machine.
-FRAME_BUDGET = 12 * 1024 ** 3
+PART_BUDGET = 4 * 1024 ** 3
 
 
 def frame_ram(frames: int, width: int, height: int) -> int:
@@ -113,9 +115,42 @@ def frame_ram(frames: int, width: int, height: int) -> int:
     return frames * width * height * 3 * 4 * FRAME_COPIES
 
 
-def frames_fitting(width: int, height: int, budget: int = FRAME_BUDGET) -> int:
+def frames_fitting(width: int, height: int, budget: int = PART_BUDGET) -> int:
     """How many frames at this size fit the budget."""
     return budget // (width * height * 3 * 4 * FRAME_COPIES)
+
+
+def windows_per_part(width: int, height: int, budget: int = PART_BUDGET) -> int:
+    """Windows one part may hold: 2 at 480p, 1 at 720p. Never fewer than 1."""
+    return max(1, 1 + (frames_fitting(width, height, budget) - WINDOW) // STEP)
+
+
+def plan(seconds: float, size=None, per_part: int | None = None) -> dict:
+    """How a clip is rendered: its windows, grouped into parts.
+
+    Every part is its own ComfyUI prompt. Part 0 starts from the picture;
+    part k continues from the last 13 frames of part k-1, re-encoded, exactly
+    as a window continues from the one before inside a part. Each part
+    outputs only its new frames (part 0: 93 + 80 per extra window; later
+    parts: 80 per window), so the parts laid end to end are the clip.
+    """
+    frames = frame_count(min(max(float(seconds), 0.01), MAX_SECONDS))
+    windows = window_count(frames)
+    width, height = output_size(size)
+    per = max(1, int(per_part or windows_per_part(width, height)))
+    parts, made = [], 0
+    for first in range(0, windows, per):
+        count = min(per, windows - first)
+        out = (WINDOW + (count - 1) * STEP) if first == 0 else count * STEP
+        keep = min(out, frames - made)
+        parts.append({"index": len(parts), "first": first, "windows": count,
+                      "start_frame": made, "frames": keep,
+                      "trim": keep < out})
+        made += keep
+    return {"frames": frames, "windows": windows, "parts": parts,
+            "per_part": per, "width": width, "height": height,
+            "rendered": rendered_frames(windows),
+            "part_ram": frame_ram(WINDOW + (per - 1) * STEP, width, height)}
 
 
 def rendered_frames(windows: int) -> int:
@@ -123,9 +158,52 @@ def rendered_frames(windows: int) -> int:
     return WINDOW + (windows - 1) * STEP
 
 
+def rehearse(graph: dict, part: int = 0) -> dict:
+    """The graph with the diffusion swapped for stand-in frames.
+
+    For testing the whole app on an engine without the 28 GB model (and
+    without a GPU): every WanVideoDecode becomes 93 copies of the resized
+    picture — a part's first window also gets the previous part's real last
+    13 frames in front, as its decode would — and the nodes that only feed
+    the model are dropped. Everything else runs as built: the picture, the
+    audio trim, loading the previous part, the overlap cuts, the joins, the
+    trim to the speech, CreateVideo and SaveVideo. Switched on by
+    AVATAR_REHEARSAL=1; never in normal use.
+    """
+    g = json.loads(json.dumps(graph))
+    resized = next(k for k, n in g.items()
+                   if n["class_type"] in ("ImageResizeKJv2", "ImageScale"))
+    for nid, node in list(g.items()):
+        if node["class_type"] != "WanVideoDecode":
+            continue
+        g[nid] = {"class_type": "RepeatImageBatch",
+                  "inputs": {"image": [resized, 0], "amount": WINDOW}}
+        if part > 0 and nid == "105":          # a part's first window
+            g[nid + "r"] = {"class_type": "RepeatImageBatch",
+                            "inputs": {"image": [resized, 0], "amount": STEP}}
+            g[nid] = {"class_type": "ImageBatch",
+                      "inputs": {"image1": ["32", 0], "image2": [nid + "r", 0]}}
+    keep = {"LoadImage", "ImageResizeKJv2", "ImageScale", "LoadAudio",
+            "TrimAudioDuration", "RepeatImageBatch", "ImageBatch",
+            "GetImageRangeFromBatch", "ImageBatchExtendWithOverlap",
+            "LoadVideo", "GetVideoComponents", "CreateVideo", "SaveVideo"}
+    g = {k: n for k, n in g.items() if n["class_type"] in keep}
+    while True:                          # drop what nothing uses any more
+        used = {str(v[0]) for n in g.values() for v in n["inputs"].values()
+                if isinstance(v, list) and len(v) == 2 and isinstance(v[1], int)}
+        dead = [k for k, n in g.items() if k not in used
+                and n["class_type"] not in ("SaveVideo",)]
+        if not dead:
+            return g
+        for k in dead:
+            del g[k]
+
+
 class ComfyClient:
     def __init__(self, url: str = "http://127.0.0.1:8188") -> None:
         self.url = url.rstrip("/")
+        import os
+        self.rehearsal = os.environ.get("AVATAR_REHEARSAL") == "1"
         self.client_id = str(uuid.uuid4())
         self._schema: dict | None = None
         self._schema_at = 0.0
@@ -406,6 +484,18 @@ class ComfyClient:
                 has, value = self._default(d)
                 if has:
                     inputs[full] = value
+        # an optional sub-combo that was asked for is filled out too
+        # (format.codec.encoding = re-encode needs its .crf)
+        for sub, d in optional.items():
+            full = f"{name}.{sub}"
+            if full in inputs and self._dynamic_options(d):
+                self._fill_dynamic(inputs, full, d)
+        # anything asked for deeper down that the choices made did not
+        # open (a codec setting under a format that has no such codec)
+        for key in [k for k in inputs if k.startswith(name + ".")]:
+            parent = key.rsplit(".", 1)[0]
+            if parent != name and parent not in inputs:
+                del inputs[key]
 
     def _node(self, class_type: str, wanted: dict) -> dict:
         """One prompt node: the wanted values matched to the node's real input
@@ -415,9 +505,22 @@ class ComfyClient:
         required = (self.schema()[class_type].get("input", {})
                     .get("required", {}) or {})
         dynamic = {n: d for n, d in spec.items() if self._dynamic_options(d)}
+        # sub-inputs of dynamic combos are matchable by their prompt names,
+        # "<combo>.<sub>", nested ones too ("format.codec.encoding.crf")
+        available = dict(spec)
+        stack = list(dynamic.items())
+        while stack:
+            name, d = stack.pop()
+            for req, opt in self._dynamic_options(d).values():
+                for sub, sd in list(req.items()) + list(opt.items()):
+                    full = f"{name}.{sub}"
+                    if full not in available:
+                        available[full] = sd
+                        if self._dynamic_options(sd):
+                            stack.append((full, sd))
         inputs: dict = {}
         for key, want in wanted.items():
-            name = self._match(spec, want["names"])
+            name = self._match(available, want["names"])
             if name is None:
                 if want.get("required"):
                     raise ComfyError(
@@ -426,7 +529,7 @@ class ComfyClient:
                         "custom nodes from the Engine page.")
                 continue
             value = want["value"]
-            options = self._combo_options(spec[name])
+            options = self._combo_options(available[name])
             if options and not isinstance(value, list) and value not in options:
                 if want.get("required"):
                     raise ComfyError(f"{class_type}: '{value}' is not one of "
@@ -449,8 +552,13 @@ class ComfyClient:
                 self._fill_dynamic(inputs, name, definition)
         return {"class_type": class_type, "inputs": inputs}
 
-    def build(self, p: dict) -> dict:
-        """p: image (in ComfyUI/input), audio (in ComfyUI/input),
+    def build(self, p: dict, part: int = 0, prev_video: str = "") -> dict:
+        """The prompt for one part of the clip (plan()); a short clip is one
+        part. prev_video is the previous part's video, already in
+        ComfyUI/input — every part after the first continues from its last
+        13 frames.
+
+        p: image (in ComfyUI/input), audio (in ComfyUI/input),
         audio_seconds (the clip length after the trim), audio_start,
         prompt, negative, size, steps, shift, cfg, audio_cfg, audio_scale,
         seed, lora_strength, quantization, attention, blocks_to_swap,
@@ -466,10 +574,28 @@ class ComfyClient:
                    random.randint(0, 2**40))
         seconds = min(max(float(p.get("audio_seconds") or 0), 0.1), MAX_SECONDS)
         start = max(float(p.get("audio_start") or 0), 0.0)
-        frames = frame_count(seconds)
-        windows = window_count(frames)
-        total = rendered_frames(windows)
-        width, height = output_size(p.get("size"))
+        layout = plan(seconds, p.get("size"), p.get("windows_per_part"))
+        frames, windows = layout["frames"], layout["windows"]
+        total = layout["rendered"]
+        width, height = layout["width"], layout["height"]
+        if not 0 <= part < len(layout["parts"]):
+            raise ComfyError(f"This clip has {len(layout['parts'])} parts; "
+                             f"there is no part {part + 1}.")
+        this = layout["parts"][part]
+        single = len(layout["parts"]) == 1
+        if part > 0 and not prev_video:
+            raise ComfyError("A later part needs the part before it.")
+        # Frames this part's audio slice starts at, and the frames_processed
+        # the first window sees: part 0 from the top; part k from 13 frames
+        # before its first new frame, so ExtendEmbeds reads its audio from
+        # the slice's own start (audio index = (processed - overlap) * 2).
+        joined_before = 0 if part == 0 else WINDOW + (this["first"] - 1) * STEP
+        slice_from = 0 if part == 0 else joined_before - OVERLAP
+        span = (WINDOW + (this["windows"] - 1) * STEP if part == 0
+                else OVERLAP + this["windows"] * STEP)
+        slice_frames = max(1, min(span, frames - slice_from))
+        slice_start = start + slice_from / FPS
+        slice_seconds = slice_frames / FPS if not single else seconds
         tiled = bool(p.get("tiled_vae", True))
         g: dict = {}
 
@@ -573,11 +699,12 @@ class ComfyClient:
             g["21"] = self._node("TrimAudioDuration", {
                 "audio": {"names": ["audio"], "value": audio_ref,
                           "required": True},
-                "start": {"names": ["start_index", "start"], "value": start},
+                "start": {"names": ["start_index", "start"],
+                          "value": round(slice_start, 4)},
                 "duration": {"names": ["duration"],
-                             "value": round(seconds, 3)}})
+                             "value": round(slice_seconds, 4)}})
             audio_ref = ["21", 0]
-        elif start > 0:
+        elif slice_start > 0:
             raise ComfyError("Starting part-way into the audio needs ComfyUI's "
                              "TrimAudioDuration node. Update ComfyUI.")
         speech_ref = audio_ref
@@ -620,7 +747,7 @@ class ComfyClient:
             "norm": {"names": ["normalize_loudness"], "value": True},
             # counted in audio frames (32 a second), not video frames
             "frames": {"names": ["num_frames"],
-                       "value": int(min(total * 2, 10000))},
+                       "value": int(min(span * 2, 10000))},
             "fps": {"names": ["fps"], "value": float(AUDIO_FPS)},
             "scale": {"names": ["audio_scale"],
                       "value": float(p.get("audio_scale", 1.0))},
@@ -638,9 +765,28 @@ class ComfyClient:
         joined_out = self._out("ImageBatchExtendWithOverlap", "extended_images", 2)
         images_ref: list | None = None
         prev_samples: list | None = None
-        done = 0                                  # frames decoded so far
-        for w in range(windows):
-            base = 100 + w * 10
+        done = 0 if part == 0 else OVERLAP        # frames_processed, slice-local
+        if part > 0:
+            # the previous part's last 13 frames, re-encoded: where this part
+            # carries on from (and the seam its first window is pinned to)
+            g["30"] = self._node("LoadVideo", {
+                "file": {"names": ["file", "video"], "value": prev_video,
+                         "required": True}})
+            g["31"] = self._node("GetVideoComponents", {
+                "video": {"names": ["video"], "value": ["30", 0],
+                          "required": True}})
+            g["32"] = self._node("GetImageRangeFromBatch", {
+                "images": {"names": ["images"],
+                           "value": ["31", self._out("GetVideoComponents",
+                                                     "images")],
+                           "required": True},
+                "start": {"names": ["start_index"], "value": -1},
+                "count": {"names": ["num_frames"], "value": OVERLAP}})
+            g["33"] = self._encode(["4", 0], ["32", 0], tiled)
+            prev_samples = ["33", 0]
+        for local in range(this["windows"]):
+            w = this["first"] + local             # the window's place in the clip
+            base = 100 + local * 10
             ext, smp, rng, enc, rep, dec, cat = (str(base + k) for k in range(7))
             ext_wanted = {
                 "prev": {"names": ["prev_latents"],
@@ -680,6 +826,23 @@ class ComfyClient:
                 g[dec] = self._decode(["4", 0], [smp, samples_out], tiled)
                 images_ref = [dec, 0]
                 done = WINDOW
+            elif local == 0:
+                # a part's first window: pin its overlap to the previous
+                # part's frames, then keep only the 80 frames that are new
+                g[rep] = self._node("ReplaceVideoLatentFrames", {
+                    "dest": {"names": ["destination"],
+                             "value": [smp, samples_out], "required": True},
+                    "src": {"names": ["source"], "value": ["33", 0],
+                            "required": True},
+                    "index": {"names": ["index"], "value": 0}})
+                g[dec] = self._decode(["4", 0], [rep, 0], tiled)
+                g[cat] = self._node("GetImageRangeFromBatch", {
+                    "images": {"names": ["images"], "value": [dec, 0],
+                               "required": True},
+                    "start": {"names": ["start_index"], "value": OVERLAP},
+                    "count": {"names": ["num_frames"], "value": STEP}})
+                images_ref = [cat, 0]
+                done += STEP
             else:
                 # the overlap frames are swapped for the decoded frames they
                 # continue from, re-encoded, so the seam does not drift
@@ -713,33 +876,50 @@ class ComfyClient:
 
         # ---------------- the clip ----------------
         frames_ref = images_ref
-        if total > frames:
+        if this["trim"]:
             # the last window is padded with audio that is not there; cut the
             # picture back to the length of the speech
             g["90"] = self._node("GetImageRangeFromBatch", {
                 "images": {"names": ["images"], "value": images_ref,
                            "required": True},
                 "start": {"names": ["start_index"], "value": 0},
-                "count": {"names": ["num_frames"], "value": frames}})
+                "count": {"names": ["num_frames"], "value": this["frames"]}})
             frames_ref = ["90", 0]
-        g["91"] = self._node("CreateVideo", {
+        video_wanted = {
             "images": {"names": ["images"], "value": frames_ref, "required": True},
+            "fps": {"names": ["fps"], "value": float(FPS)}}
+        if single:
             # the original audio, music and all — only the lips listen to
-            # the isolated voice
-            "audio": {"names": ["audio"], "value": audio_ref},
-            "fps": {"names": ["fps"], "value": float(FPS)}})
-        g["92"] = self._node("SaveVideo", {
+            # the isolated voice. A part has none: the app lays the whole
+            # soundtrack under the joined parts in one piece
+            video_wanted["audio"] = {"names": ["audio"], "value": audio_ref}
+        g["91"] = self._node("CreateVideo", video_wanted)
+        save_wanted = {
             "video": {"names": ["video"], "value": ["91", 0], "required": True},
             "prefix": {"names": ["filename_prefix"],
-                       "value": "video/LongCatAvatar"}})
+                       "value": "video/LongCatAvatar" if single
+                       else "video/LongCatAvatar_part"}}
+        if not single:
+            # a part is read back for the next part's seam and re-encoded
+            # into the clip: keep it near-lossless where SaveVideo allows
+            save_wanted.update({
+                "format": {"names": ["format"], "value": "mp4"},
+                "codec": {"names": ["format.codec"], "value": "h264"},
+                "encoding": {"names": ["format.codec.encoding"],
+                             "value": "re-encode"},
+                "crf": {"names": ["format.codec.encoding.crf"], "value": 10.0}})
+        g["92"] = self._node("SaveVideo", save_wanted)
+        if self.rehearsal:
+            g = rehearse(g, part)
 
         return {"prompt": g, "seed": seed, "files": files, "frames": frames,
                 "windows": windows, "rendered": total, "samplers": samplers,
-                "window_of": window_of,
+                "window_of": window_of, "part": part,
+                "parts": layout["parts"], "this_part": this,
                 "width": width, "height": height, "fps": FPS,
                 "size": f"{width}x{height}",
                 "seconds": round(frames / FPS, 2), "note": note,
-                "frame_ram": frame_ram(total, width, height)}
+                "part_ram": layout["part_ram"]}
 
     def _encode(self, vae: list, image: list, tiled: bool) -> dict:
         return self._node("WanVideoEncode", {

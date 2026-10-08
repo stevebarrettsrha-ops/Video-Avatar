@@ -42,11 +42,23 @@
 11. **Link outputs by name.** `ImageBatchExtendWithOverlap`'s output 0 is
     a passthrough; joining from it dropped every window but the first, and
     ComfyUI accepted it (all IMAGE). `_out()` resolves by output name.
-12. **`--cache-none` always; `--lowvram` unless the person set a memory
-    mode** (`AVATAR_COMFY_ARGS`). ComfyUI refuses two modes, and without
-    `--cache-none` the joined frames pile up (a 31 s clip was OOM-killed).
-    Frame RAM is `frames × w × h × 3 × 4 × 4` (`frame_ram()`, mirrored in
-    the page, within 3 % of a real measurement).
+12. **Long clips are parts; ComfyUI's cache stays on.** One graph holds
+    all its frames (~4 float32 copies while joining: 18.6 MB a frame at
+    480p, measured), so `comfy.plan()` splits a clip into parts of
+    `windows_per_part()` windows (4 GB budget: 2 at 480p, 1 at 720p). Part
+    k loads part k−1's video (LoadVideo), re-encodes its last 13 frames as
+    prev_latents and the seam, reads its own audio slice starting 13 frames
+    before its first new frame (frames_processed 13 → audio index 0), and
+    outputs only its new frames. Seeds and the progress map use the window's
+    place in the whole clip. Parts carry no audio; `assemble.py` joins them
+    frame by frame (PyAV) and lays the original soundtrack under them in one
+    piece. `--cache-none` is NOT used: the cache keeps the model loaded
+    between parts. `--lowvram` unless the person set a memory mode
+    (`AVATAR_COMFY_ARGS`) — ComfyUI refuses two. Verified on a real engine:
+    5 min (30 parts) peaks within 1 GB of 30 s, both joined to the frame.
+13. **`AVATAR_REHEARSAL=1` is a test seam only.** `comfy.rehearse()` swaps
+    the diffusion for stand-in frames so the real app runs end to end on an
+    engine without the model.
 
 ## Graceful degradation
 

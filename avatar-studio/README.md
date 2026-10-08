@@ -11,7 +11,7 @@ setup sheet, and Models and Engine pages. Generation runs on kijai's
 [ComfyUI-WanVideoWrapper](https://github.com/kijai/ComfyUI-WanVideoWrapper),
 following his official example workflow (copied to `assets/`).
 
-![The Create page, mid-render: window 2 of 3](assets/screenshot.png)
+![A two-minute clip rendering: window 5 of 24, part 3 of 12](assets/screenshot.png)
 
 ---
 
@@ -44,13 +44,17 @@ make it fit:
   costs about a minute per new prompt, and the result is cached on disk.
 - **Tiled VAE, 480p, the distill LoRA** (12 steps at cfg 1).
 
-**How long a clip can be is set by RAM, not the GPU.** The decoded frames
-are float32, about four copies alive while the windows are joined
-(measured: 500 frames at 832×480 took 9.3 GB). Beside the fp8 model on a
-32 GB machine that is about **42 s at 480p, or 18 s at 720p**, per clip. The
-Create page shows the estimate for each clip and warns, with the part length
-to use, when it is over. For longer speech, render it in parts with **Start
-at** / **Length**.
+**There is no length limit worth the name — up to an hour per clip.** The
+GPU never sees more than one 5.8-second window at a time, so 8 GB of VRAM
+does the same work for a 10-second clip as for a 10-minute one. What grows
+with length is the decoded frames in RAM, so a long clip is rendered in
+**parts** of two windows (one at 720p), each its own ComfyUI job that carries
+on from the last 13 frames of the part before. The parts are then joined
+into one video a frame at a time, with the original soundtrack laid under it
+in one piece. Measured on a real ComfyUI: a 5-minute clip (30 parts) peaked
+within 1 GB of a 30-second one, and the joined files were exactly 4,800 and
+480 frames with the speech to the millisecond. A clip's frames need about
+3 GB of RAM at 480p whatever its length; time is the only thing that grows.
 
 **Nothing here has been timed on a real 8 GB card yet.** Expect several
 minutes per 5.8-second window. The first real render will give the true
@@ -83,7 +87,7 @@ yourself. Then it does the following:
 4. Installs PyTorch and the packs' requirements.
 5. Downloads the weights, resumably, with one progress bar for the whole
    set.
-6. Starts ComfyUI with `--lowvram --cache-none --preview-method auto`.
+6. Starts ComfyUI with `--lowvram --preview-method auto`.
 
 A failed or cancelled download keeps what arrived and resumes next time.
 
@@ -96,7 +100,7 @@ A failed or cancelled download keeps what arrived and resumes next time.
 2. **Speech.** Choose an audio file, or a video whose soundtrack is used.
    Or press **Record** and talk. A recording is converted to WAV in the
    browser before it is uploaded. **Start at** and **Length** pick a
-   stretch of a longer file. One clip is at most 120 s.
+   stretch of a longer file. A clip can be up to an hour long.
 3. **Prompt.** Describe the person and the scene. It steers motion,
    expression and setting; the lips follow the audio regardless.
 4. **Size.** Landscape 832×480 (the workflow's own), Portrait 480×832,
@@ -109,7 +113,8 @@ windows.
 
 LongCat-Avatar renders **93 frames at a time, at 16 fps** (5.8 s). Kijai's
 workflow wires three windows by hand. This app builds as many as the speech
-needs: `windows = 1 + ceil((frames − 93) / 80)`.
+needs: `windows = 1 + ceil((frames − 93) / 80)`, grouped into parts of 2
+windows (1 at 720p) so memory stays flat however long the speech is.
 
 - The first window starts from the picture alone.
 - Each later window continues from the last 13 frames of the one before.
@@ -119,6 +124,11 @@ needs: `windows = 1 + ceil((frames − 93) / 80)`.
   person's.
 - The windows are joined with `ImageBatchExtendWithOverlap` (cut), then
   trimmed back to the exact length of the speech.
+- A long clip's parts are separate ComfyUI jobs. Part *k* loads part *k−1*'s
+  video, re-encodes its last 13 frames as the start of its first window, and
+  listens to its own slice of the speech. ComfyUI's cache keeps the model
+  loaded from part to part. `assemble.py` joins the parts frame by frame
+  with PyAV and adds the soundtrack in one piece.
 
 The finished clip carries the **original** audio, music and all. Only the
 lips listen to the isolated voice.
@@ -150,7 +160,7 @@ AVATAR_REAL_COMFY=http://127.0.0.1:8188 AVATAR_REAL_MODELS=/path/ComfyUI/models 
     python tests/run.py real   # against a real ComfyUI with the three packs
 ```
 
-**237 checks**, all passing. See [docs/TEST_REPORT.md](docs/TEST_REPORT.md)
+**267 checks**, all passing. See [docs/TEST_REPORT.md](docs/TEST_REPORT.md)
 for what each suite proves and the bugs the testing found, and
 [docs/screenshots/](docs/screenshots/) for every screen.
 
@@ -174,6 +184,10 @@ assets/        kijai's example workflow this follows, and a screenshot
 tests/         python tests/run.py: the suite, against a mock ComfyUI
 data/          config.json, gallery.json, clips/
 ```
+
+`AVATAR_REHEARSAL=1` (tests only) swaps the diffusion for stand-in frames,
+so the whole app — parts, joins, assembly — can run on an engine without the
+model.
 
 `AVATAR_COMFY_ARGS` adds flags to the ComfyUI the app starts, e.g.
 `--use-sage-attention`. A memory mode (`--cpu`, `--highvram`, `--novram`)

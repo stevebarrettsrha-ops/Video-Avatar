@@ -73,7 +73,9 @@ def run(slow: bool = False) -> Suite:
                     ("no picture", {"image": ""}, "picture"),
                     ("no audio", {"audio": ""}, "speech"),
                     ("no length", {"audio_seconds": 0}, "audio_seconds"),
-                    ("over two minutes", {"audio_seconds": 121}, "audio_seconds"),
+                    ("over an hour", {"audio_seconds": 3601}, "audio_seconds"),
+                    ("parts of 30 windows", {"windows_per_part": 30},
+                     "windows_per_part"),
                     ("an unknown size", {"size": "999x999"}, "Size"),
                     ("steps that are text", {"steps": "many"}, "steps"),
                     ("block swap past 48", {"blocks_to_swap": 49}, "blocks_to_swap"),
@@ -180,6 +182,81 @@ def run(slow: bool = False) -> Suite:
                     all(by_id[k]["state"] == "ok" for k in
                         ("node:wrapper", "node:kjnodes", "node:melband")))
             s.equal("the weights row is ok", by_id["models"]["state"], "ok")
+
+    # -- a long clip: parts, handed on, joined -----------------------------
+    import io, math, struct, wave
+    import av
+    buf = io.BytesIO()
+    with av.open(buf, "w", format="mp4") as out:
+        st = out.add_stream("libx264", rate=16)
+        st.width, st.height, st.pix_fmt = 832, 480, "yuv420p"
+        for i in range(180):
+            frame = av.VideoFrame(832, 480, "yuv420p")
+            for plane in frame.planes:
+                plane.update(bytes([(i * 7) % 256]) * plane.buffer_size)
+            frame.pts = i
+            for pkt in st.encode(frame):
+                out.mux(pkt)
+        for pkt in st.encode():
+            out.mux(pkt)
+    part_video = buf.getvalue()
+    tone = io.BytesIO()
+    with wave.open(tone, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+        w.writeframes(b"".join(struct.pack("<h", int(5000 * math.sin(i / 9)))
+                               for i in range(16000 * 31)))
+    with comfy(delay=0.2) as mock, Workspace() as ws:
+        fake_weights(ws / "models")
+        requests.post(f"{mock.url}/testvideo", data=part_video, timeout=20)
+        with studio(mock.url, ws / "data", ws / "models") as app:
+            upload(app.url, "face.png", PNG)
+            upload(app.url, "speech31.wav", tone.getvalue())
+            r = requests.post(f"{app.url}/api/generate", json={
+                "image": "face.png", "audio": "speech31.wav", "seed": 4,
+                "audio_seconds": 30}, timeout=20)
+            job_id = r.json()["jobs"][0]
+            stages = set()
+
+            def watch():
+                job = next(j for j in requests.get(f"{app.url}/api/jobs",
+                                                   timeout=10).json()
+                           if j["id"] == job_id)
+                stages.add(job.get("stage", "").split(" · ")[0])
+                stages.add(" · ".join(job.get("stage", "").split(" · ")[1:2]))
+                return job["status"] != "running"
+            wait_for(watch, 120, 0.2)
+            job = next(j for j in finish_jobs(app.url) if j["id"] == job_id)
+            s.equal("a 30 s clip renders as 3 parts and finishes",
+                    (job["status"], job.get("parts")), ("done", 3))
+            queued = list(requests.get(f"{mock.url}/prompts", timeout=10)
+                          .json().values())[-3:]
+            loads = [[n["inputs"]["file"] for n in g.values()
+                      if n["class_type"] == "LoadVideo"] for g in queued]
+            s.check("each part after the first loads the part before it, "
+                    "uploaded under the job's name",
+                    loads[0] == [] and len(loads[1]) == 1 and len(loads[2]) == 1
+                    and loads[1][0].endswith("part000.mp4")
+                    and loads[2][0].endswith("part001.mp4"), str(loads))
+            s.check("progress says which part is rendering",
+                    any("part 2 of 3" in x.lower() for x in stages), str(stages))
+            s.check("the joining step is shown",
+                    any(x.startswith("Joining 3 parts") for x in stages))
+            clip = job["images"][0]
+            path = ws / "data" / "clips" / clip["file"]
+            with av.open(str(path)) as got:
+                frames = sum(1 for _ in got.decode(video=0))
+            with av.open(str(path)) as got:
+                a = got.streams.audio[0]
+                audio_s = float(a.duration * a.time_base) if a.duration else 0
+                rate = got.streams.video[0].average_rate
+            s.equal("the joined clip is exactly the speech's 480 frames at 16 fps",
+                    (frames, float(rate)), (480, 16.0))
+            s.check("with the speech underneath, 30 s of it",
+                    abs(audio_s - 30) < 0.05, f"{audio_s:.3f} s")
+            s.check("and the parts are cleaned away",
+                    not list((ws / "data" / "parts").glob("*/*.mp4")))
+            s.equal("the seed is the clip's, one for all its parts",
+                    clip["seed"], 4)
 
     # -- a render that runs out of memory says what to change --------------
     with comfy(delay=0.2, MOCK_FAIL_AFTER="1") as mock, Workspace() as ws:

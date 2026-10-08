@@ -829,15 +829,14 @@ class ComfyProcess:
         # ComfyUI takes one memory mode; a mode of the person's own (--cpu on
         # a machine with no GPU, --highvram on a big card) replaces ours —
         # with both, ComfyUI refuses to start at all
-        if lowvram:
+        if lowvram and not any(a in VRAM_MODES for a in extra):
             # The wrapper's block swap is what keeps the DiT in system RAM;
             # --lowvram keeps ComfyUI's own models (the audio models, the VAE)
-            # off the card between uses. --cache-none frees each window's
-            # frames once the next join has them: measured on a real engine,
-            # without it a 31 s clip held 14 GB of frames and was killed.
-            if not any(a in VRAM_MODES for a in extra):
-                cmd += ["--lowvram"]
-            cmd += ["--cache-none"]
+            # off the card between uses. ComfyUI's cache stays ON: a long
+            # clip is a chain of prompts (comfy.plan), and the cache is what
+            # keeps the model loaded from one part to the next. The parts
+            # are what bound the frames in memory, whatever the length.
+            cmd += ["--lowvram"]
         # ComfyUI sends no step previews unless asked; the live preview in
         # the app (the wrapper's sampler previews each step) needs them
         cmd += ["--preview-method", "auto"]

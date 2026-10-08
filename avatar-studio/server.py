@@ -10,6 +10,8 @@ import json
 import math
 import mimetypes
 import os
+import random
+import shutil
 import sys
 import threading
 import time
@@ -256,6 +258,102 @@ def elapsed(seconds: float) -> str:
 # --------------------------------------------------------------------------- #
 # generation job
 # --------------------------------------------------------------------------- #
+class Cancelled(Exception):
+    pass
+
+
+class Failed(Exception):
+    pass
+
+
+def _wait_prompt(job_id: str, prompt_id: str, built: dict, set_state,
+                 started: float) -> list[dict]:
+    """Follow one prompt to its outputs, moving the job's bar and stage.
+
+    The windows count across the whole clip, parts included: window 7 of 24
+    is window 7 of 24 whichever part it is in. Raises Cancelled or Failed.
+    """
+    windows = built["windows"]
+    first = built["this_part"]["first"]
+    parts = len(built["parts"])
+    unreachable_since = None
+    while True:
+        time.sleep(1.0)
+        with jobs_lock:
+            cancelled = jobs[job_id].get("cancelled")
+        # only "cancelled" once ComfyUI has actually let go of it;
+        # otherwise try again next second
+        if cancelled and client.cancel(prompt_id):
+            raise Cancelled()
+        try:
+            err = client.failed(prompt_id)
+            outs = [] if err else client.outputs(prompt_id)
+            unreachable_since = None
+        except requests.RequestException:
+            # a machine paging the DiT through RAM can stall a reply past its
+            # timeout; that is not a failed render. Only an engine gone for
+            # minutes is.
+            unreachable_since = unreachable_since or time.time()
+            if time.time() - unreachable_since > 300:
+                raise Failed("ComfyUI stopped answering for five minutes. "
+                             "Check the Engine page.")
+            continue
+        if err:
+            raise Failed(err)
+        if outs:
+            return outs
+        wp = ws_progress.get(prompt_id) or {}
+        value, maximum = wp.get("value", 0), wp.get("max", 0)
+        took = elapsed(time.time() - started)
+        where = (f" · part {built['part'] + 1} of {parts}" if parts > 1 else "")
+        local = built["samplers"].get(str(wp.get("node") or ""))
+        if maximum and local is not None:
+            # one bar across every window of the clip: each an equal slice
+            window = local                       # samplers map to the clip's
+            done = (window + min(value / maximum, 1)) / windows
+            set_state(pct=round(6 + done * 88, 1),
+                      stage=(f"Window {window + 1} of {windows} · step "
+                             f"{value} of {maximum}{where} · {took}"))
+        else:
+            # no steps to count: the node's name and a running clock say it
+            # is alive, and the bar never walks backwards
+            node = (built["prompt"].get(wp.get("node") or "") or {})
+            with jobs_lock:
+                was = jobs[job_id].get("pct") or 0
+            floor = 6 + first / windows * 88
+            set_state(pct=max(was, floor if first else
+                              min(5 + (time.time() - started) / 8, 12)),
+                      stage=f"{stage_for(node.get('class_type', ''))}{where}"
+                            f" · {took}")
+        if time.time() - started > 48 * 3600:
+            raise Failed("Nothing after two days. On a small card that is "
+                         "usually paging rather than rendering — see the "
+                         "preflight on the Engine page.")
+
+
+def _download(item: dict, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with client.view(item) as resp:
+        resp.raise_for_status()
+        with open(dest, "wb") as fh:
+            for chunk in resp.iter_content(1024 * 256):
+                fh.write(chunk)
+
+
+def _input_file(name: str, dest: Path) -> Path:
+    """A file from ComfyUI/input (the original speech) onto this disk."""
+    sub, _, fname = name.replace("\\", "/").rpartition("/")
+    with requests.get(f"{cfg['comfy_url']}/view",
+                      params={"filename": fname, "subfolder": sub,
+                              "type": "input"}, stream=True, timeout=600) as r:
+        r.raise_for_status()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with open(dest, "wb") as fh:
+            for chunk in r.iter_content(1024 * 256):
+                fh.write(chunk)
+    return dest
+
+
 def run_job(job_id: str, params: dict) -> None:
     def set_state(**kw):
         if kw.get("status", "running") != "running":
@@ -263,115 +361,101 @@ def run_job(job_id: str, params: dict) -> None:
         with jobs_lock:
             jobs[job_id].update(kw)
 
+    work = DATA_DIR / "parts" / job_id
     try:
         set_state(stage="Building the graph", pct=2)
-        built = client.build(params)
-        prompt_id = client.queue(built["prompt"])
-        windows = built["windows"]
-        set_state(prompt_id=prompt_id, seed=built.get("seed"), pct=5,
-                  windows=windows, stage="Queued in ComfyUI")
-
+        # one seed for the whole clip: part k's windows take seed + window
+        if params.get("seed") in (None, ""):
+            params["seed"] = random.randint(0, 2**40)
+        layout = comfy.plan(params.get("audio_seconds") or 0.1,
+                            params.get("size"), params.get("windows_per_part"))
+        parts = layout["parts"]
+        set_state(windows=layout["windows"], parts=len(parts),
+                  seed=params["seed"])
         started = time.time()
-        unreachable_since = None
-        while True:
-            time.sleep(1.0)
-            with jobs_lock:
-                cancelled = jobs[job_id].get("cancelled")
-            # only "cancelled" once ComfyUI has actually let go of it;
-            # otherwise try again next second
-            if cancelled and client.cancel(prompt_id):
-                set_state(status="cancelled", stage="Cancelled")
-                return
-            try:
-                err = client.failed(prompt_id)
-                outs = [] if err else client.outputs(prompt_id)
-                unreachable_since = None
-            except requests.RequestException:
-                # a machine paging the DiT through RAM can stall a reply past
-                # its timeout; that is not a failed render. Only an engine
-                # gone for minutes is.
-                unreachable_since = unreachable_since or time.time()
-                if time.time() - unreachable_since > 300:
-                    set_state(status="error", stage="Failed",
-                              error="ComfyUI stopped answering for five "
-                                    "minutes. Check the Engine page.")
-                    return
-                continue
-            if err:
-                set_state(status="error", error=err, stage="Failed")
-                return
-            if outs:
+        prev_name = ""
+        part_files: list[tuple[Path, int]] = []
+        built: dict = {}
+        outs: list[dict] = []
+        for part in parts:
+            built = client.build(params, part=part["index"],
+                                 prev_video=prev_name)
+            prompt_id = client.queue(built["prompt"])
+            set_state(prompt_id=prompt_id,
+                      stage="Queued in ComfyUI" if part["index"] == 0
+                      else f"Part {part['index'] + 1} of {len(parts)} queued")
+            outs = _wait_prompt(job_id, prompt_id, built, set_state, started)
+            if len(parts) == 1:
                 break
-            wp = ws_progress.get(prompt_id) or {}
-            value, maximum = wp.get("value", 0), wp.get("max", 0)
-            took = elapsed(time.time() - started)
-            window = built["samplers"].get(str(wp.get("node") or ""))
-            if maximum and window is not None:
-                # one bar across every window: each is an equal slice
-                done = (window + min(value / maximum, 1)) / windows
-                set_state(pct=round(6 + done * 88, 1),
-                          stage=(f"Window {window + 1} of {windows} · step "
-                                 f"{value} of {maximum} · {took}"))
-            else:
-                # no steps to count: the node's name and a running clock say
-                # it is alive, and the bar never walks backwards
-                node = (built["prompt"].get(wp.get("node") or "") or {})
-                with jobs_lock:
-                    was = jobs[job_id].get("pct") or 0
-                window = built.get("window_of", {}).get(str(wp.get("node") or ""))
-                floor = 6 + (window or 0) / windows * 88 if window else 0
-                set_state(pct=max(was, floor,
-                                  min(5 + (time.time() - started) / 8, 12)),
-                          stage=f"{stage_for(node.get('class_type', ''))} · {took}")
-            if time.time() - started > 12 * 3600:
-                set_state(status="error", stage="Timed out",
-                          error="Nothing after twelve hours. On a small card "
-                                "that is usually paging rather than rendering "
-                                "— see the preflight on the Engine page.")
-                return
+            # keep the part, and hand it to ComfyUI for the next one's seam
+            dest = work / f"part_{part['index']:03d}.mp4"
+            _download(outs[0], dest)
+            part_files.append((dest, part["frames"]))
+            if part["index"] + 1 < len(parts):
+                with open(dest, "rb") as fh:
+                    class Up:
+                        filename = f"avatar_{job_id}_part{part['index']:03d}.mp4"
+                        stream = fh
+                        mimetype = "video/mp4"
+                    prev_name = client.upload(Up())
 
-        set_state(stage="Saving", pct=96)
         CLIPS_DIR.mkdir(parents=True, exist_ok=True)
-        saved = []
-        files = built.get("files") or {}
-        for index, item in enumerate(outs):
-            clip_id = uuid.uuid4().hex[:12]
-            ext = Path(item["filename"]).suffix or ".mp4"
+        clip_id = uuid.uuid4().hex[:12]
+        dest = CLIPS_DIR / f"{clip_id}.mp4"
+        if len(parts) == 1:
+            set_state(stage="Saving", pct=96)
+            ext = Path(outs[0]["filename"]).suffix or ".mp4"
             dest = CLIPS_DIR / f"{clip_id}{ext}"
-            with client.view(item) as resp:
-                resp.raise_for_status()
-                with open(dest, "wb") as fh:
-                    for chunk in resp.iter_content(1024 * 256):
-                        fh.write(chunk)
-            saved.append({
-                "id": clip_id, "file": dest.name, "kind": "avatar",
-                "title": params.get("title") or title_from(params),
-                "prompt": params.get("prompt", ""),
-                "image": params.get("image", ""),
-                "audio": params.get("audio", ""),
-                "audio_label": params.get("audio_label", ""),
-                "audio_start": params.get("audio_start") or 0,
-                "audio_seconds": params.get("audio_seconds"),
-                "size": built.get("size"),
-                "width": built.get("width"), "height": built.get("height"),
-                "frames": built.get("frames"), "fps": built.get("fps"),
-                "windows": built.get("windows"),
-                "seconds": built.get("seconds"),
-                "steps": params.get("steps"), "shift": params.get("shift"),
-                "audio_cfg": params.get("audio_cfg"),
-                "audio_scale": params.get("audio_scale"),
-                "quantization": params.get("quantization"),
-                "isolate_voice": params.get("isolate_voice", True),
-                "note": built.get("note", ""),
-                "seed": built.get("seed"), "batch_index": index,
-                "model": files.get("dit", ""), "lora": files.get("lora", ""),
-                "created": time.time(),
-            })
+            _download(outs[0], dest)
+        else:
+            set_state(stage=f"Joining {len(parts)} parts into one clip",
+                      pct=95)
+            speech = _input_file(params["audio"], work / "speech"
+                                 / Path(params["audio"]).name)
+            import assemble
+            assemble.assemble(
+                part_files, dest, comfy.FPS, audio=speech,
+                audio_start=float(params.get("audio_start") or 0),
+                audio_seconds=float(params["audio_seconds"]),
+                should_cancel=lambda: jobs[job_id].get("cancelled"))
+        files = built.get("files") or {}
+        saved = [{
+            "id": clip_id, "file": dest.name, "kind": "avatar",
+            "title": params.get("title") or title_from(params),
+            "prompt": params.get("prompt", ""),
+            "image": params.get("image", ""),
+            "audio": params.get("audio", ""),
+            "audio_label": params.get("audio_label", ""),
+            "audio_start": params.get("audio_start") or 0,
+            "audio_seconds": params.get("audio_seconds"),
+            "size": built.get("size"),
+            "width": built.get("width"), "height": built.get("height"),
+            "frames": built.get("frames"), "fps": built.get("fps"),
+            "windows": built.get("windows"), "parts": len(parts),
+            "seconds": built.get("seconds"),
+            "steps": params.get("steps"), "shift": params.get("shift"),
+            "audio_cfg": params.get("audio_cfg"),
+            "audio_scale": params.get("audio_scale"),
+            "quantization": params.get("quantization"),
+            "isolate_voice": params.get("isolate_voice", True),
+            "note": built.get("note", ""),
+            "seed": params["seed"], "batch_index": 0,
+            "model": files.get("dit", ""), "lora": files.get("lora", ""),
+            "created": time.time(),
+        }]
         add_images(saved)
         set_state(status="done", pct=100, stage="Ready", images=saved)
-    except ComfyError as exc:
+        shutil.rmtree(work, ignore_errors=True)
+    except Cancelled:
+        set_state(status="cancelled", stage="Cancelled")
+        shutil.rmtree(work, ignore_errors=True)
+    except (Failed, ComfyError) as exc:
         set_state(status="error", error=str(exc), stage="Failed")
     except Exception as exc:  # noqa: BLE001
+        msg = str(exc)
+        if "Cancelled" in msg:
+            set_state(status="cancelled", stage="Cancelled")
+            return
         set_state(status="error", error=f"{type(exc).__name__}: {exc}",
                   stage="Failed")
 
@@ -892,6 +976,9 @@ def api_generate():
                                             -100, 1000, int)
         params["ref_mask_frame_range"] = _number(
             params, "ref_mask_frame_range", 3, 0, 20, int)
+        if params.get("windows_per_part") not in (None, ""):
+            params["windows_per_part"] = _number(params, "windows_per_part",
+                                                 2, 1, 24, int)
         if params.get("seed") not in (None, ""):
             params["seed"] = _number(params, "seed", 0, 0, 2**63, int)
     except ValueError as exc:

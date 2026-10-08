@@ -85,7 +85,12 @@ def _object_info():
     # classic-style, LoadAudio as a V3 combo
     if "LoadImage" in out:
         out["LoadImage"]["input"]["required"]["image"][0] = \
-            [n for n in names if not n.lower().endswith(AUDIO_EXT)] or ["example.png"]
+            [n for n in names if not n.lower().endswith(AUDIO_EXT + (".mp4",))] \
+            or ["example.png"]
+    if "LoadVideo" in out:
+        out["LoadVideo"]["input"]["required"]["file"][1]["options"] = \
+            [n for n in names if n.lower().endswith((".mp4", ".webm", ".mov",
+                                                     ".mkv"))]
     if "LoadAudio" in out:
         out["LoadAudio"]["input"]["required"]["audio"][1]["options"] = \
             [n for n in names if n.lower().endswith(AUDIO_EXT)]

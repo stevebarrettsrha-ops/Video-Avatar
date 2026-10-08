@@ -403,7 +403,7 @@
             <div class="trim" id="trimRow" hidden>
               <label>Start at <input type="text" id="trimStart" inputmode="decimal" value="0"> s</label>
               <label>Length <input type="text" id="trimLen" inputmode="decimal" placeholder="all"> s</label>
-              <span class="hint">Up to 120 s per clip.</span>
+              <span class="hint">Any length up to an hour.</span>
             </div>
             <div class="bar speechbar">
               <textarea id="description" rows="2" spellcheck="false"
@@ -727,7 +727,7 @@ function inputUrl(name) { return "/api/input?name=" + encodeURIComponent(name); 
 /* ========================= the frame maths =========================
    Mirrors comfy.py: 16 fps, 93-frame windows, each later window re-using
    the last 13 frames of the one before, so it adds 80. */
-var FPS = 16, WINDOW = 93, OVERLAP = 13, STEP = WINDOW - OVERLAP, MAX_SECONDS = 120;
+var FPS = 16, WINDOW = 93, OVERLAP = 13, STEP = WINDOW - OVERLAP, MAX_SECONDS = 3600;
 var SIZES = { "832x480": [832, 480], "480x832": [480, 832], "640x640": [640, 640],
               "1280x720": [1280, 720], "720x1280": [720, 1280] };
 var DEFAULT_NEGATIVE = "Close-up, bright tones, overexposed, static, blurred " +
@@ -743,11 +743,16 @@ function windowCount(frames) {
   return 1 + Math.max(0, Math.ceil((frames - WINDOW) / STEP));
 }
 // comfy.frame_ram(): decoded frames are float32 RGB, about four copies alive
-// while the windows are joined (measured on a real ComfyUI)
-var FRAME_COPIES = 4, FRAME_BUDGET = 12 * 1024 * 1024 * 1024;
+// while the windows are joined (measured on a real ComfyUI). A long clip is
+// rendered in parts that each fit PART_BUDGET, so memory does not grow with
+// length — comfy.plan() / windows_per_part()
+var FRAME_COPIES = 4, PART_BUDGET = 4 * 1024 * 1024 * 1024;
 function frameRam(frames, w, h) { return frames * w * h * 3 * 4 * FRAME_COPIES; }
 function framesFitting(w, h) {
-  return Math.floor(FRAME_BUDGET / (w * h * 3 * 4 * FRAME_COPIES));
+  return Math.floor(PART_BUDGET / (w * h * 3 * 4 * FRAME_COPIES));
+}
+function windowsPerPart(w, h) {
+  return Math.max(1, 1 + Math.floor((framesFitting(w, h) - WINDOW) / STEP));
 }
 // The stretch of audio a clip is made from: from the start offset, for the
 // chosen length or to the end, never past two minutes.
@@ -769,27 +774,25 @@ function syncPlan() {
   var note = $("planNote");
   if (!S.audio) {
     note.innerHTML = "Add a picture and some speech. The clip is as long as " +
-      "the speech, up to two minutes; the lips follow the audio and the " +
+      "the speech, however long; the lips follow the audio and the " +
       "prompt steers everything else.";
   } else if (!sec) {
     note.innerHTML = '<span class="bad-text">The start is past the end of the ' +
       "audio.</span>";
   } else {
     var f = frameCount(sec), w = windowCount(f);
-    var rendered = WINDOW + (w - 1) * STEP;
-    var ram = frameRam(rendered, d[0], d[1]);
-    note.innerHTML = "<b>" + d[0] + "×" + d[1] + "</b> · <b>" + sec.toFixed(1) +
-      " s</b> of speech → " + f + " frames at 16 fps, rendered as <b>" + w +
+    var per = windowsPerPart(d[0], d[1]), parts = Math.ceil(w / per);
+    var ram = frameRam(WINDOW + (Math.min(per, w) - 1) * STEP, d[0], d[1]);
+    var mins = Math.floor(sec / 60);
+    note.innerHTML = "<b>" + d[0] + "×" + d[1] + "</b> · <b>" +
+      (mins ? mins + " min " + Math.round(sec % 60) + " s" : sec.toFixed(1) + " s") +
+      "</b> of speech → " + f + " frames at 16 fps, rendered as <b>" + w +
       " window" + (w > 1 ? "s" : "") + "</b> of 93 frames (5.8 s each" +
-      (w > 1 ? ", every later one re-using the last 13 frames" : "") +
-      "). The frames need about <b>" + (ram / 1073741824).toFixed(1) +
-      " GB</b> of RAM while they are joined.";
-    if (ram > FRAME_BUDGET) {
-      var fit = Math.floor(framesFitting(d[0], d[1]) / FPS);
-      note.innerHTML += ' <span class="bad-text" id="ramWarn">That is more than ' +
-        "fits beside the model on a 32 GB machine — render it in parts of " +
-        "about " + fit + " s (Start at / Length), or pick a smaller size.</span>";
-    }
+      (w > 1 ? ", every later one re-using the last 13 frames" : "") + ")" +
+      (parts > 1 ? ', in <b id="partsNote">' + parts + " parts</b> joined into " +
+        "one clip at the end" : "") +
+      ". The frames need about <b>" + (ram / 1073741824).toFixed(1) +
+      " GB</b> of RAM" + (parts > 1 ? " — the same for any length" : "") + ".";
   }
   var cost = $("costNote");
   if (cost) {
@@ -1307,6 +1310,7 @@ function openLightbox(im) {
               ["Lip-sync strength", im.audio_cfg || "—"],
               ["Weights", im.quantization === "disabled" ? "bf16" : "fp8"],
               ["Model", short(im.model) || "—"]];
+  if (im.parts > 1) rows.push(["Rendered in", im.parts + " parts, joined"]);
   if (im.lora) rows.push(["Distill LoRA", short(im.lora)]);
   if (im.note) rows.push(["Note", im.note]);
   $("lbMeta").innerHTML = rows.map(function (r) {

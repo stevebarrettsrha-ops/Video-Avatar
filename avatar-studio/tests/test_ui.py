@@ -121,17 +121,19 @@ def run(slow: bool = False) -> Suite:
             s.check("a start past the end says so",
                     "past the end" in page.locator("#planNote").inner_text())
             page.fill("#trimStart", "0")
-            s.check("a short clip carries no memory warning",
-                    page.locator("#ramWarn").count() == 0)
-            page.evaluate("S.audio.duration = 60; syncPlan()")
-            warn = page.locator("#ramWarn")
-            s.check("a minute at 480p warns it will not fit beside the model, "
-                    "and says how long a part should be",
-                    warn.count() == 1 and "about 42 s" in warn.inner_text(),
-                    warn.inner_text() if warn.count() else "no warning")
-            page.fill("#trimLen", "40")
-            s.check("a 40 s part fits", page.locator("#ramWarn").count() == 0)
-            page.fill("#trimLen", "")
+            s.check("a short clip is one part — nothing to join",
+                    page.locator("#partsNote").count() == 0)
+            page.evaluate("S.audio.duration = 600; syncPlan()")
+            plan = page.locator("#planNote").inner_text()
+            s.check("ten minutes at 480p: 120 windows in 60 parts, no warning, "
+                    "and the same memory as any other length",
+                    "120 windows" in plan and "60 parts" in plan
+                    and "the same for any length" in plan
+                    and "3.1 GB" in plan and "bad-text" not in
+                    page.inner_html("#planNote"), plan)
+            page.evaluate("S.audio.duration = 3600; syncPlan()")
+            s.check("an hour is allowed too",
+                    "720 windows" in page.locator("#planNote").inner_text())
             page.evaluate("S.audio.duration = 7.5; syncPlan()")
             page.click('#segSize button[data-v="480x832"]')
             s.check("portrait is chosen",

@@ -158,6 +158,52 @@ def probe(path: Path) -> dict:
             "audio": float(a[0]["duration"]) if a else 0.0}
 
 
+def _pids_by(pred) -> list[int]:
+    out = []
+    for proc in Path("/proc").iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            cmd = (proc / "cmdline").read_bytes().replace(b"\0", b" ").decode()
+        except OSError:
+            continue
+        if pred(cmd):
+            out.append(int(proc.name))
+    return out
+
+
+def engine_pid(port: int) -> int:
+    """The ComfyUI answering on the port (its main.py with --port)."""
+    # the python running main.py, not a shell that launched it
+    pids = _pids_by(lambda c: "main.py" in c and f"--port {port}" in c
+                    and "python" in c.split(" ", 1)[0])
+    return max(pids, key=rss) if pids else 0
+
+
+def rss(pid: int) -> int:
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return 0
+
+
+def rss_of_port(port: int) -> int:
+    from harness import ROOT
+    pids = _pids_by(lambda c: "server.py" in c)
+    best = 0
+    for pid in pids:
+        try:
+            env = Path(f"/proc/{pid}/environ").read_bytes()
+        except OSError:
+            continue
+        if f"AVATAR_STUDIO_PORT={port}".encode() in env:
+            best = max(best, rss(pid))
+    return best
+
+
 def run(slow: bool = False) -> Suite:
     s = Suite("real")
     client = ComfyClient(URL)
@@ -185,7 +231,7 @@ def run(slow: bool = False) -> Suite:
     for size in comfy.SIZES:
         for sec, aud in lengths.items():
             built = client.build({**base, "audio": aud, "audio_seconds": sec,
-                                  "size": size})
+                                  "size": size, "windows_per_part": 24})
             code, body = post(built["prompt"])
             count += 1
             if code != 200:
@@ -194,7 +240,7 @@ def run(slow: bool = False) -> Suite:
     s.check(f"the real validator accepts all {count} size × length graphs",
             not rejected, str(rejected)[:600])
     built = client.build({**base, "audio": lengths[120.0],
-                          "audio_seconds": 120.0})
+                          "audio_seconds": 120.0, "windows_per_part": 24})
     s.equal("two minutes is 24 windows, 1920 frames",
             (built["windows"], built["frames"]), (24, 1920))
     s.check("the 24-window graph is accepted too",
@@ -218,9 +264,13 @@ def run(slow: bool = False) -> Suite:
             str(bad)[:600])
 
     # -- 2. the stitching and the output, executed --------------------------
-    for sec in (5.8, 12.5, 31.25):
+    for sec in (5.8, 12.5):
+        # one graph for the whole clip here: the in-graph join. Kept to
+        # lengths the app does render as one graph — a 31 s single graph is
+        # what ran the engine out of memory, and why long clips are parts
+        # (section 3)
         built = client.build({**base, "audio": lengths[sec],
-                              "audio_seconds": sec})
+                              "audio_seconds": sec, "windows_per_part": 24})
         graph = rehearsal(built)
         r = requests.post(f"{URL}/prompt", json={"prompt": graph}, timeout=60)
         if not s.check(f"{sec} s: the rehearsal graph is accepted", r.ok,
@@ -250,7 +300,86 @@ def run(slow: bool = False) -> Suite:
                 abs(got["frames"] / 16 - got["audio"]) < 1 / 16 + 0.05,
                 f"{got['frames'] / 16:.3f} s of picture, {got['audio']:.3f} s of sound")
 
-    # -- 3. the app, driving the real engine --------------------------------
+    # -- 3. long clips: parts, end to end, memory flat ----------------------
+    # The real app (AVATAR_REHEARSAL=1: stand-in frames instead of the model)
+    # renders a 30 s and a 5 min clip on the real engine: every part queued
+    # in turn, each loading the part before it, then joined with the
+    # soundtrack. ComfyUI's memory is sampled throughout; the promise is that
+    # it does not grow with length.
+    import threading
+    from harness import Server, free_port
+    port = int(URL.rsplit(":", 1)[-1])
+    engine = engine_pid(port)
+    s.check("the engine's process is found to measure", rss(engine) > 0,
+            str(engine))
+    for sec in (30.0, 300.0):
+        upload(f"avatar_long_{int(sec)}s.wav", speech_wav(sec + 0.5))
+    with Workspace() as ws:
+        data = ws / "data"
+        data.mkdir()
+        (data / "config.json").write_text(json.dumps({
+            "comfy_url": URL, "models_dir": MODELS or str(ws), "managed": False,
+            "auto_start_comfy": False, "setup_complete": True}))
+        aport = free_port()
+        with Server([sys.executable, "server.py"], aport, "/api/status",
+                    env={"AVATAR_STUDIO_PORT": str(aport),
+                         "AVATAR_STUDIO_NO_BROWSER": "1",
+                         "AVATAR_STUDIO_DATA": str(data),
+                         "AVATAR_REHEARSAL": "1"}) as app:
+            peaks = {}
+            for sec in (30.0, 300.0):
+                samples: list[int] = []
+                stop = threading.Event()
+
+                def sample():
+                    while not stop.is_set():
+                        samples.append(rss(engine))
+                        time.sleep(0.25)
+                t = threading.Thread(target=sample, daemon=True)
+                t.start()
+                began = time.time()
+                r = requests.post(f"{app.url}/api/generate", json={
+                    "image": img, "audio": f"avatar_long_{int(sec)}s.wav",
+                    "audio_seconds": sec, "seed": 1,
+                    "prompt": "A person talks."}, timeout=60)
+                job_id = r.json()["jobs"][0]
+                wait_for(lambda: next(j for j in requests.get(
+                    f"{app.url}/api/jobs", timeout=10).json()
+                    if j["id"] == job_id)["status"] != "running", 3600, 1)
+                stop.set()
+                t.join()
+                job = next(j for j in requests.get(f"{app.url}/api/jobs",
+                                                   timeout=10).json()
+                           if j["id"] == job_id)
+                took = time.time() - began
+                if not s.check(f"{sec:.0f} s: the app renders it in "
+                               f"{job.get('parts')} parts on the real engine",
+                               job["status"] == "done", job.get("error", "")):
+                    continue
+                clip = job["images"][0]
+                got = probe(data / "clips" / clip["file"])
+                want = comfy.frame_count(sec)
+                s.equal(f"{sec:.0f} s: joined to exactly {want} frames at 16 fps",
+                        (got["frames"], got["fps"], got["size"]),
+                        (want, 16.0, (832, 480)))
+                s.check(f"{sec:.0f} s: with {sec:.0f} s of the speech under it",
+                        abs(got["audio"] - sec) < 0.1, f"{got['audio']:.3f} s")
+                peaks[sec] = max(samples)
+                print(f"  ..   {sec:.0f} s: {job.get('parts')} parts in "
+                      f"{took:.0f} s; engine memory peaked at "
+                      f"{max(samples) / 2**30:.2f} GB (started at "
+                      f"{samples[0] / 2**30:.2f} GB)")
+            if len(peaks) == 2:
+                s.check("ten times the length, the same memory: the 5 min "
+                        "clip's engine peak is within 1 GB of the 30 s one",
+                        peaks[300.0] < peaks[30.0] + 2**30,
+                        f"{peaks[30.0] / 2**30:.2f} GB vs "
+                        f"{peaks[300.0] / 2**30:.2f} GB")
+            s.check("and the app itself stays small while joining",
+                    rss_of_port(aport) < 600 * 2**20,
+                    f"{rss_of_port(aport) / 2**20:.0f} MB")
+
+    # -- 4. the app, driving the real engine --------------------------------
     if not MODELS:
         print("  --   AVATAR_REAL_MODELS not set, so the app was not run "
               "against the engine")
