@@ -1,0 +1,2065 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LongCat Avatar Studio</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect width=%2216%22 height=%2216%22 rx=%224%22 fill=%22%2314b8a6%22/%3E%3Ccircle cx=%228%22 cy=%226.5%22 r=%222.6%22 fill=%22white%22/%3E%3Cpath d=%22M3.5 13.5c.8-2.4 2.5-3.6 4.5-3.6s3.7 1.2 4.5 3.6z%22 fill=%22white%22/%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#08080a; --chrome:#101014; --panel:#14141a; --raised:#1a1a21;
+    --line:#222229; --hair:#1a1a20;
+    --text:#f2f2f3; --muted:#7e7e88; --dim:#5a5a64;
+    --accent:#14b8a6; --accent-2:#6366f1; --pink:#f472b6;
+    --obj:#d4a017; --txt:#3ddc97;
+    --ok:#3ddc97; --warn:#ffb020; --err:#ff5a5a;
+    --rail:194px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--text);overflow:hidden;
+    font-family:Inter,"Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+    font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  button,input,textarea,select{font:inherit;color:inherit}
+  button{cursor:pointer;border:0;background:none}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:8px}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#26262e;border-radius:8px;border:3px solid var(--bg)}
+  ::-webkit-scrollbar-track{background:transparent}
+  svg{stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+  [hidden]{display:none!important}
+  input[type=text],input[type=password],select,textarea{background:#16161c;
+    border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:13px;
+    color:var(--text);width:100%}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:#3a3a46}
+  textarea{resize:vertical}
+  .flab{font-size:11px;color:var(--muted);margin-bottom:5px;display:block}
+
+  .app{display:grid;grid-template-columns:var(--rail) 1fr;height:100vh}
+  .rail{border-right:1px solid var(--hair);padding:16px 12px;display:flex;
+        flex-direction:column;gap:3px;background:var(--chrome)}
+  .main{overflow-y:auto;position:relative}
+
+  /* rail */
+  .brand{display:flex;align-items:center;gap:9px;padding:6px 10px 18px;
+         font-weight:700;font-size:14px;letter-spacing:.15em}
+  .brand .dot{width:9px;height:9px;border-radius:50%;
+              background:linear-gradient(135deg,var(--accent),var(--accent-2))}
+  .nav{display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:10px;
+       color:var(--muted);font-weight:500;width:100%;text-align:left}
+  .nav:hover{background:var(--panel);color:var(--text)}
+  .nav[aria-current="page"]{background:var(--raised);color:var(--text)}
+  .nav svg{width:17px;height:17px;flex:none}
+  .nav .tag{margin-left:auto;font-size:10px;padding:2px 6px;border-radius:6px;
+            background:var(--pink);color:#fff;font-weight:600}
+  .rail .spacer{flex:1}
+  .who{display:flex;align-items:center;gap:9px;padding:9px 12px;color:var(--muted);
+       font-size:13px}
+  .who .av{width:18px;height:18px;border-radius:50%;
+           background:linear-gradient(135deg,var(--accent-2),var(--accent))}
+  .statuspill{display:flex;align-items:center;gap:8px;padding:8px 12px;font-size:12px;
+              color:var(--muted);border-radius:10px;width:100%;text-align:left}
+  .statuspill:hover{background:var(--panel)}
+  .statuspill i{width:7px;height:7px;border-radius:50%;background:var(--dim);flex:none}
+  .statuspill.on i{background:var(--ok);box-shadow:0 0 0 3px rgba(61,220,151,.16)}
+  .statuspill.off i{background:var(--err);box-shadow:0 0 0 3px rgba(255,90,90,.14)}
+
+  /* ---------- prompt bar: the hero ---------- */
+  /* The wrap paints a gradient over content scrolling beneath it; without the
+     pointer-events pair, its transparent padding also swallows their clicks. */
+  .barwrap{position:sticky;top:0;z-index:20;padding:18px 26px 12px;
+           background:linear-gradient(180deg,var(--bg) 72%,transparent);
+           pointer-events:none}
+  .barwrap>*{pointer-events:auto}
+  .bar{max-width:1080px;margin:0 auto;background:var(--panel);
+       border:1px solid var(--line);border-radius:18px;padding:12px 12px 10px;
+       transition:border-color .15s,box-shadow .15s}
+  .bar:focus-within{border-color:#1f4b47;
+       box-shadow:0 0 0 1px rgba(20,184,166,.35),0 24px 60px -34px rgba(20,184,166,.8)}
+  .bar textarea{background:transparent;border:0;padding:6px 8px 2px;font-size:16px;
+       line-height:1.5;min-height:52px;max-height:200px;overflow-y:auto}
+  .bar textarea::placeholder{color:var(--dim)}
+  .barrow{display:flex;align-items:center;gap:7px;padding:6px 4px 0;flex-wrap:wrap}
+  .barrow .grow{flex:1}
+  .pill{display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border-radius:999px;
+        background:var(--raised);border:1px solid var(--line);font-size:12.5px;
+        color:var(--muted);white-space:nowrap}
+  .pill:hover{border-color:#34343e;color:var(--text)}
+  .pill.on{border-color:rgba(20,184,166,.6);background:rgba(20,184,166,.14);color:#99f6e4}
+  .pill svg{width:14px;height:14px}
+  .pill select{background:transparent;border:0;padding:0;width:auto;font-size:12.5px;
+               max-width:150px}
+  .chips{display:inline-flex;background:var(--raised);border:1px solid var(--line);
+         border-radius:999px;padding:3px}
+  .chips button{padding:5px 11px;border-radius:999px;font-size:12px;color:var(--muted)}
+  .chips button.on{background:#2e2e38;color:var(--text)}
+  .gen{padding:9px 20px;border-radius:999px;font-weight:600;font-size:13.5px;
+       display:inline-flex;align-items:center;gap:8px;color:#fff;
+       background:linear-gradient(100deg,var(--accent),var(--accent-2));
+       box-shadow:0 10px 26px -14px rgba(224,57,138,.9)}
+  .gen:disabled{opacity:.45;box-shadow:none;cursor:not-allowed}
+  /* auto-fill, not auto-fit: with one reference loaded, auto-fit collapses the
+     empty tracks and stretches that card across the full 1080px — a viewport-
+     high sticky bar that buries the feed. auto-fill keeps cards thumbnail-size. */
+  .details{max-width:1080px;margin:10px auto 0;display:grid;
+           grid-template-columns:repeat(auto-fill,minmax(120px,168px));gap:8px}
+
+  /* ---------- feed ---------- */
+  .feed{padding:6px 26px 60px;max-width:1440px;margin:0 auto}
+  .feedhead{display:flex;align-items:center;gap:10px;margin:14px 0 12px;
+            font-size:13px;color:var(--muted)}
+  .feedhead .grow{flex:1}
+  .masonry{columns:4;column-gap:12px}
+  @media (max-width:1500px){.masonry{columns:3}}
+  @media (max-width:1050px){.masonry{columns:2}}
+  @media (max-width:640px){.masonry{columns:1}}
+  .tile{break-inside:avoid;margin-bottom:12px;position:relative;border-radius:14px;
+        overflow:hidden;background:var(--panel);border:1px solid var(--hair);
+        display:block;width:100%}
+  .tile img{width:100%;display:block}
+  .tile .over{position:absolute;inset:auto 0 0 0;padding:32px 12px 11px;
+        background:linear-gradient(180deg,transparent,rgba(0,0,0,.82));
+        opacity:0;transition:opacity .16s;text-align:left}
+  .tile:hover .over,.tile:focus-within .over{opacity:1}
+  .tile .over .cap{font-size:12px;color:#e9e9ec;display:-webkit-box;
+        -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .tile .over .meta{font-size:10.5px;color:#a9a9b4;margin-top:3px}
+  .tile .acts{position:absolute;top:8px;right:8px;display:flex;gap:4px;opacity:0;
+        transition:opacity .16s}
+  .tile:hover .acts,.tile:focus-within .acts{opacity:1}
+  .tile .acts button{width:28px;height:28px;border-radius:8px;background:rgba(8,8,10,.72);
+        border:1px solid rgba(255,255,255,.1);color:#fff;display:grid;place-items:center}
+  .tile .acts button:hover{background:rgba(8,8,10,.92)}
+  .tile .acts svg{width:14px;height:14px}
+  .skel{break-inside:avoid;margin-bottom:12px;border-radius:14px;overflow:hidden;
+        background:var(--panel);border:1px solid var(--hair);padding:14px}
+  .skel .ph{position:relative;overflow:hidden}
+  img.pv{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+    border-radius:inherit;display:block}
+  .bph.pvbox{position:relative;overflow:hidden;padding:0}
+  .bph-l{font-size:12px;color:var(--muted);margin-top:6px}
+  .skel .ph{width:100%;border-radius:10px;background:
+        linear-gradient(100deg,#17171e 30%,#22222c 50%,#17171e 70%);
+        background-size:220% 100%;animation:sweep 1.5s linear infinite}
+  @keyframes sweep{to{background-position:-220% 0}}
+  .skel .lbl{font-size:12px;color:var(--muted);margin-top:10px;display:flex;
+        justify-content:space-between;gap:8px}
+  .bar4{height:3px;border-radius:2px;background:#23232b;margin-top:8px;overflow:hidden}
+  .bar4 i{display:block;height:100%;border-radius:2px;transition:width .4s ease;
+        background:linear-gradient(90deg,var(--accent),var(--accent-2))}
+  .skel.bad{border-color:rgba(255,90,90,.4)}
+  .skel.bad .lbl{color:#ff9a9a}
+  .empty{padding:60px 20px;text-align:center;color:var(--dim);font-size:13px}
+  .empty b{display:block;color:var(--muted);font-size:14px;margin-bottom:6px}
+  /* inside the masonry the message must span the columns, not be split by them */
+  .masonry .empty{column-span:all;break-inside:avoid}
+
+  /* ---------- popovers ---------- */
+  .pop{max-height:calc(100vh - 24px);overflow-y:auto}
+  .pop{position:fixed;z-index:40;background:var(--panel);border:1px solid var(--line);
+       border-radius:16px;padding:16px;width:min(420px,92vw);
+       box-shadow:0 30px 70px -30px #000}
+  .pop h3{margin:0 0 12px;font-size:13.5px;font-weight:600}
+  .orow{display:flex;align-items:center;gap:12px;padding:9px 11px;background:var(--raised);
+        border-radius:10px;margin-bottom:7px;font-size:12.5px;flex-wrap:wrap}
+  .orow .lab{color:#c6c6cf;white-space:nowrap}
+  .orow .ctl{margin-left:auto;display:flex;align-items:center;gap:9px}
+  .orow select{width:auto;min-width:112px;padding:5px 8px;font-size:12px;background:#212129}
+  .orow input[type=text]{width:120px;background:transparent;border:0;text-align:right}
+  .slider{display:flex;align-items:center;gap:9px;min-width:170px}
+  .slider input[type=range]{flex:1;-webkit-appearance:none;appearance:none;height:20px;
+        background:repeating-linear-gradient(90deg,#30303a 0 1px,transparent 1px 11px)
+        center/100% 11px no-repeat}
+  .slider input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:5px;
+        height:17px;border-radius:3px;background:var(--pink);cursor:pointer}
+  .slider input[type=range]::-moz-range-thumb{width:5px;height:17px;border:0;
+        border-radius:3px;background:var(--pink);cursor:pointer}
+  .slider .v{font-size:12px;color:#c6c6cf;width:60px;text-align:right;
+        font-variant-numeric:tabular-nums}
+
+  /* ---------- lightbox ---------- */
+  .lightbox{position:fixed;inset:0;background:#06060a;z-index:80;display:flex;
+            align-items:stretch}
+  .lightbox .stage{flex:1;display:grid;place-items:center;padding:34px;min-width:0;
+            min-height:0}
+  /* contain scales small images up to fill the stage as well as shrinking big ones */
+  .lightbox .stage video{width:100%;height:100%;object-fit:contain;
+            border-radius:12px;display:block;background:#000}
+  .lightbox .side{width:330px;flex:none;border-left:1px solid var(--hair);
+            background:var(--chrome);padding:22px;overflow-y:auto}
+  .lightbox .side h3{margin:0 0 4px;font-size:15px}
+  .lightbox .side .pr{font-size:13px;color:#d6d6db;line-height:1.6;margin:10px 0 16px}
+  .kv{display:flex;justify-content:space-between;gap:10px;padding:7px 0;
+      border-bottom:1px solid var(--hair);font-size:12px;color:var(--muted)}
+  .kv b{color:var(--text);font-weight:500;text-align:right;word-break:break-all}
+  .lbacts{display:flex;gap:7px;flex-wrap:wrap;margin-top:16px}
+
+  .loraline{display:flex;align-items:center;gap:9px;padding:8px 10px;
+       background:var(--raised);border:1px solid var(--line);border-radius:10px;
+       margin-bottom:6px;font-size:12.5px}
+  .loraline.on{border-color:var(--accent)}
+  .loraline .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+       white-space:nowrap;cursor:pointer}
+  .loraline input[type=range]{width:96px;accent-color:var(--pink)}
+  .loraline .trig{flex:none;font-size:11px;color:var(--pink);
+       background:rgba(255,45,122,.12);border-radius:5px;padding:2px 7px}
+  .loraline .st{width:32px;text-align:right;font-size:11.5px;color:var(--muted);
+       font-variant-numeric:tabular-nums}
+  .hit{display:flex;gap:10px;padding:9px;border-radius:11px;background:var(--raised);
+       border:1px solid var(--line);margin-bottom:6px;align-items:center}
+  .hit .n{min-width:0;flex:1}
+  .hit .n b{display:block;font-size:12.5px;font-weight:500;white-space:nowrap;
+       overflow:hidden;text-overflow:ellipsis}
+  .hit .n span{font-size:11px;color:var(--dim)}
+
+  /* ---------- pages: models + engine ---------- */
+  .page{padding:26px 26px 80px;max-width:980px;margin:0 auto}
+  .panel{background:var(--panel);border:1px solid var(--hair);border-radius:14px;
+         padding:16px;margin-bottom:12px}
+  .panel h2{margin:0 0 4px;font-size:15px}
+  .panel p.sub{margin:0 0 14px;color:var(--muted);font-size:13px;line-height:1.6}
+  .frow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  .frow input[type=text],.frow input[type=password]{flex:1;min-width:190px}
+  .frow select{width:auto;min-width:170px}
+  .flist{display:flex;flex-direction:column;gap:6px}
+  .fitem{display:flex;align-items:center;gap:12px;padding:11px 13px;background:var(--raised);
+         border-radius:11px}
+  .fitem .n{font-size:13px;min-width:0}
+  .fitem .n b{font-weight:500;display:block;word-break:break-all}
+  .fitem .n span{font-size:11.5px;color:var(--dim)}
+  .fitem .right{margin-left:auto;display:flex;align-items:center;gap:8px;flex:none}
+  .state{font-size:11px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);
+         color:var(--muted);white-space:nowrap}
+  .state.ok{color:#8ff0c4;border-color:rgba(61,220,151,.36);background:rgba(61,220,151,.09)}
+  .state.missing{color:#ffa8a8;border-color:rgba(255,90,90,.36);background:rgba(255,90,90,.08)}
+  .state.warn{color:#ffd693;border-color:rgba(255,176,32,.36);background:rgba(255,176,32,.08)}
+  .setrow{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--raised);
+          border:1px solid var(--line);border-radius:12px;margin-bottom:8px;flex-wrap:wrap}
+  .setrow.on{border-color:var(--accent)}
+  .setrow .n b{display:block;font-size:13px}
+  .setrow .n span{font-size:11.5px;color:var(--dim)}
+  .setrow .right{margin-left:auto;display:flex;gap:8px;align-items:center}
+  .log{background:#050507;border:1px solid var(--hair);border-radius:11px;padding:12px;
+       font-family:ui-monospace,"Cascadia Mono",Menlo,Consolas,monospace;font-size:11.5px;
+       color:#93939d;height:200px;overflow-y:auto;white-space:pre-wrap;line-height:1.55}
+  .btn{padding:9px 15px;border-radius:10px;background:#232329;font-size:12.5px;
+       font-weight:500}
+  .btn:hover{background:#2c2c34}
+  .btn.go{background:linear-gradient(100deg,var(--accent),var(--accent-2));color:#fff}
+  .btn.thin{padding:6px 12px;font-size:12px}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .note{font-size:12px;color:var(--dim);margin:10px 0 0;line-height:1.55}
+  .bad-text{color:#ff9a9a}
+
+  /* ---------- sheets ---------- */
+  .veil{position:fixed;inset:0;background:rgba(4,4,6,.86);backdrop-filter:blur(7px);
+        display:grid;place-items:center;padding:24px;z-index:60}
+  .sheet{width:min(720px,100%);max-height:88vh;overflow-y:auto;background:var(--panel);
+         border:1px solid var(--line);border-radius:18px;padding:26px 28px}
+  .sheet h1{margin:0 0 6px;font-size:20px}
+  .sheet p.lede{margin:0 0 18px;color:var(--muted);line-height:1.6}
+  .steps{display:flex;flex-direction:column;gap:2px;margin:16px 0}
+  .step{display:flex;gap:12px;align-items:flex-start;padding:10px 12px;border-radius:11px}
+  .step .mark{width:20px;height:20px;border-radius:50%;border:1.5px solid #34343c;flex:none;
+              display:grid;place-items:center;font-size:11px;color:var(--dim);margin-top:1px}
+  .step.running{background:var(--raised)}
+  .step.running .mark{border-color:var(--accent);color:#99f6e4}
+  .step.done .mark{background:var(--ok);border-color:var(--ok);color:#06210f}
+  .step.error .mark{background:var(--err);border-color:var(--err);color:#2a0606}
+  .step .body{flex:1;min-width:0}
+  .step .lbl{font-size:13.5px;font-weight:500;display:flex;gap:10px;
+             justify-content:space-between;align-items:baseline}
+  .step .pc{font-size:12px;font-weight:600;color:#99f6e4;flex:none;
+            font-variant-numeric:tabular-nums}
+  .step .dt{font-size:12px;color:var(--dim);margin-top:2px;word-break:break-word}
+  .step.error .dt{color:#ff9a9a}
+  .step .bar4{margin-top:7px}
+  /* No byte count to go on — a moving sliver says "working", not "0%". */
+  .bar4.indet i{width:34%;animation:slide 1.3s ease-in-out infinite}
+  @keyframes slide{0%{margin-left:-34%}100%{margin-left:100%}}
+  .pick{display:flex;flex-direction:column;gap:8px;margin:14px 0}
+  .pick label{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;
+        border-radius:12px;border:1px solid var(--line);background:var(--raised);
+        cursor:pointer}
+  .pick label:has(input:checked){border-color:var(--accent);background:rgba(20,184,166,.09)}
+  .pick input{margin-top:3px;accent-color:var(--accent);width:auto}
+  .pick b{display:block;font-size:13.5px}
+  .pick em{font-style:normal;font-size:12.5px;color:var(--muted);display:block;
+        line-height:1.55}
+  .rowbtn{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+  .switch{display:flex;align-items:center;justify-content:space-between;gap:10px;
+        background:var(--raised);border:1px solid var(--line);border-radius:10px;
+        padding:9px 11px;font-size:12.5px}
+  .switch input{accent-color:var(--accent);width:16px;height:16px}
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}
+  .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:90;
+        background:#1b1b22;border:1px solid var(--line);border-radius:11px;
+        padding:11px 16px;font-size:13px;box-shadow:0 18px 40px -20px #000;
+        max-width:min(560px,92vw)}
+  .toast.bad{border-color:rgba(255,90,90,.5);color:#ffb3b3}
+
+  @media (max-width:760px){
+    .app{grid-template-columns:1fr;grid-template-rows:auto 1fr}
+    .rail{flex-direction:row;overflow-x:auto;padding:8px;border-right:0;
+          border-bottom:1px solid var(--hair)}
+    .rail .spacer,.who,.brand,.statuspill{display:none}
+    .nav{width:auto;white-space:nowrap}
+    .barwrap,.feed,.page{padding-left:14px;padding-right:14px}
+    .lightbox{flex-direction:column}
+    .lightbox .side{width:auto;border-left:0;border-top:1px solid var(--hair);
+          max-height:45vh}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+  /* ---------- composer: picture + speech + prompt ---------- */
+  .compose{max-width:1080px;margin:0 auto;display:grid;
+           grid-template-columns:220px 1fr;gap:12px}
+  @media (max-width:760px){.compose{grid-template-columns:1fr}}
+  .slot{background:var(--panel);border:1px solid var(--line);border-radius:18px;
+        padding:12px;position:relative}
+  .slot h4{margin:0 0 8px;font-size:11px;letter-spacing:.12em;color:var(--muted);
+        font-weight:600;display:flex;align-items:center;gap:8px}
+  .slot h4 .grow{flex:1}
+  .portrait{aspect-ratio:3/4;border:1px dashed #2f3a3a;border-radius:12px;
+        display:grid;place-items:center;text-align:center;color:var(--dim);
+        font-size:12.5px;cursor:pointer;overflow:hidden;width:100%;padding:0;
+        background:#111417}
+  .portrait:hover,.portrait.drag{border-color:var(--accent);color:#99f6e4}
+  .portrait img{width:100%;height:100%;object-fit:cover;display:block}
+  .portrait svg{width:30px;height:30px;margin-bottom:6px}
+  .xbtn{position:absolute;top:8px;right:8px;width:24px;height:24px;border-radius:7px;
+        background:rgba(8,8,10,.72);border:1px solid rgba(255,255,255,.1);color:#fff;
+        display:grid;place-items:center;font-size:13px}
+  .speech{display:flex;flex-direction:column;gap:9px}
+  .speechrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .speech audio{width:100%;height:36px}
+  .rec{color:#fecaca;border-color:rgba(255,90,90,.6)!important;
+       background:rgba(255,90,90,.12)!important}
+  .rec i{width:8px;height:8px;border-radius:50%;background:var(--err);
+       display:inline-block;animation:blink 1s steps(2) infinite}
+  @keyframes blink{50%{opacity:.2}}
+  .trim{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--muted);
+        align-items:center}
+  .trim input{width:78px;padding:5px 8px;font-size:12px}
+  .plan{font-size:12px;color:var(--dim);line-height:1.55}
+  .plan b{color:var(--muted);font-weight:500}
+  .bar{grid-column:1/-1}
+  .bar.speechbar{grid-column:auto;margin:0;width:100%;max-width:none}
+  .hint{font-size:12px;color:var(--dim)}
+  .orow textarea{min-height:64px;font-size:12px}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ===================== rail ===================== -->
+  <aside class="rail">
+    <div class="brand"><i class="dot"></i>AVATAR</div>
+    <button class="nav" data-view="create" aria-current="page">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.3-4 4.3-6 8-6s6.7 2 8 6"/></svg>Create</button>
+    <button class="nav" data-view="library">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Library</button>
+    <button class="nav" data-view="models">
+      <svg viewBox="0 0 24 24"><path d="M12 3 3 8l9 5 9-5zM3 16l9 5 9-5M3 12l9 5 9-5"/></svg>Models
+      <span class="tag" id="modelsTag" hidden>!</span></button>
+    <button class="nav" data-view="engine">
+      <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9zM2 10h2M2 14h2M20 10h2M20 14h2M10 2v2M14 2v2M10 20v2M14 20v2"/></svg>Engine
+      <span class="tag" id="engineTag" hidden>!</span></button>
+    <div class="spacer"></div>
+    <button class="statuspill" id="enginePill"><i></i><span>Checking engine…</span></button>
+    <button class="nav" id="navSettings">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0a1.6 1.6 0 0 0-2.8-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 14a2 2 0 1 1 0-4a1.6 1.6 0 0 0 1.7-2.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10 3a2 2 0 1 1 4 0a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.6 1.6 0 0 0 21 10a2 2 0 1 1 0 4a1.6 1.6 0 0 0-1.6 1z"/></svg>Settings</button>
+    <div class="who"><span class="av"></span>Local engine</div>
+  </aside>
+
+  <!-- ===================== main ===================== -->
+  <main class="main" id="mainCol">
+
+    <!-- create -->
+    <section data-page="create">
+      <div class="barwrap">
+        <div class="compose">
+          <div class="slot">
+            <h4>PICTURE<span class="grow"></span></h4>
+            <button class="portrait" id="imgCard" title="A photo or drawing of the person — click or drop a file">
+              <span id="imgEmpty"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg><br>Add a picture<br><span class="hint">face clearly visible</span></span>
+              <img id="imgThumb" alt="The person" hidden>
+            </button>
+            <button class="xbtn" id="imgClear" title="Remove the picture" hidden>×</button>
+            <input type="file" id="imgFile" accept="image/*" hidden>
+          </div>
+          <div class="slot speech">
+            <h4>SPEECH<span class="grow"></span>
+              <span class="hint" id="audioInfo">No audio yet</span></h4>
+            <div class="speechrow">
+              <button class="pill" id="btnAudioFile" title="A recording, a song, or a video whose soundtrack is used">
+                <svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                Choose audio</button>
+              <input type="file" id="audioFile" accept="audio/*,video/*" hidden>
+              <button class="pill" id="btnRecord" title="Record from the microphone">
+                <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/></svg>
+                <span id="recLabel">Record</span></button>
+              <button class="pill" id="audioClear" hidden>Remove</button>
+            </div>
+            <audio id="audioPlayer" controls preload="metadata" hidden></audio>
+            <div class="trim" id="trimRow" hidden>
+              <label>Start at <input type="text" id="trimStart" inputmode="decimal" value="0"> s</label>
+              <label>Length <input type="text" id="trimLen" inputmode="decimal" placeholder="all"> s</label>
+              <span class="hint">Any length up to an hour.</span>
+            </div>
+            <div class="bar speechbar">
+              <textarea id="description" rows="2" spellcheck="false"
+                placeholder="Describe the person and the scene — e.g. A woman in a blue blazer talks to the camera in a bright office, natural hand gestures."></textarea>
+              <div class="barrow">
+                <div class="chips" id="segSize" title="The size of the finished clip">
+                  <button class="on" data-v="832x480">Landscape</button>
+                  <button data-v="480x832">Portrait</button>
+                  <button data-v="640x640">Square</button>
+                  <button data-v="1280x720">720p</button>
+                  <button data-v="720x1280">720p tall</button>
+                </div>
+                <button class="pill" id="btnSettings">
+                  <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="18" r="2"/></svg>
+                  Settings</button>
+                <span class="grow"></span>
+                <button class="pill" id="btnBatch" title="Clips per press">×1</button>
+                <button class="gen" id="btnGenerate">
+                  <svg viewBox="0 0 24 24" style="width:15px;height:15px"><path d="m12 3 2 5.5L19.5 10 14 12l-2 5.5L10 12 4.5 10 10 8.5z"/></svg>
+                  <span id="genLabel">Generate</span></button>
+              </div>
+            </div>
+            <div class="plan" id="planNote"></div>
+          </div>
+        </div>
+      </div>
+      <div class="feed">
+        <div class="masonry" id="feed"></div>
+      </div>
+    </section>
+
+    <!-- library -->
+    <section data-page="library" hidden>
+      <div class="feed">
+        <div class="feedhead" style="margin-top:22px">Library<span class="grow"></span>
+          <input type="text" id="libSearch" style="max-width:250px"
+                 placeholder="Search your clips"></div>
+        <div class="masonry" id="libGrid"></div>
+      </div>
+    </section>
+
+    <!-- models -->
+    <section class="page" data-page="models" hidden>
+      <div class="panel">
+        <h2>Weights</h2>
+        <p class="sub">LongCat Avatar needs five files — the avatar model, its
+          distill LoRA, the umT5 text encoder, the Wan 2.1 VAE and wav2vec2 —
+          plus MelBandRoFormer for voice isolation. Sizes marked ≈ are
+          estimates until HuggingFace is asked; setup reads the real ones
+          before it downloads.</p>
+        <div id="setsList"></div>
+        <label class="flab" style="margin-top:14px">How the model sits in memory</label>
+        <div class="pick" id="precisionModels"></div>
+      </div>
+      <div class="panel">
+        <h2>HuggingFace</h2>
+        <div class="frow">
+          <input type="password" id="hf-token" placeholder="Access token (only for gated repos)">
+          <input type="text" id="hf-endpoint" placeholder="https://huggingface.co">
+          <button class="btn" id="btnSaveHf">Save</button>
+        </div>
+        <p class="note" id="hf-token-note"></p>
+      </div>
+      <div class="panel">
+        <h2>Browse a repo</h2>
+        <div class="frow">
+          <input type="text" id="hf-repo" placeholder="Kijai/LongCat-Video_comfy">
+          <select id="hf-folder"></select>
+          <button class="btn go" id="btnBrowse">Browse</button>
+        </div>
+        <div class="flist" id="repo-list"></div>
+      </div>
+      <div class="panel">
+        <h2>Downloads</h2>
+        <div class="flist" id="dl-list"></div>
+      </div>
+      <div class="panel">
+        <h2>On this machine</h2>
+        <p class="sub" id="models-dir-note"></p>
+        <div class="flist" id="local-list"></div>
+      </div>
+    </section>
+
+    <!-- engine -->
+    <section class="page" data-page="engine" hidden>
+      <div class="panel">
+        <h2>Everything Avatar Studio needs</h2>
+        <p class="sub">Install anything marked missing. It all runs from here — no
+          command prompt, no manual downloads.</p>
+        <div class="flist" id="dep-list"></div>
+        <div class="rowbtn">
+          <button class="btn" id="btnRecheck">Recheck</button>
+          <button class="btn go" id="btnInstallAll">Install everything missing</button>
+          <button class="btn js-start" id="btnStartEngine">Start ComfyUI</button>
+          <button class="btn" id="btnRestartEngine">Restart ComfyUI</button>
+          <button class="btn" id="btnReRun">Run setup again</button>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Engine console</h2>
+        <p class="sub" id="engine-state">Checking…</p>
+        <div class="log" id="engine-log">Nothing yet — start ComfyUI and its
+          output lands here.</div>
+      </div>
+      <div class="panel">
+        <h2>Preflight</h2>
+        <p class="sub">What this machine can do with these weights. Measured,
+          not guessed.</p>
+        <div id="preflight"></div>
+        <div class="rowbtn"><button class="btn" id="btnPreflight">Measure again</button></div>
+      </div>
+      <div class="panel">
+        <h2>PyTorch build</h2>
+        <p class="sub">Chosen from your hardware. Change it if PyTorch will not install
+          or your GPU is being ignored.</p>
+        <div class="frow">
+          <select id="torch-index">
+            <option value="">Automatic</option>
+            <option value="https://download.pytorch.org/whl/cu128">NVIDIA — CUDA 12.8</option>
+            <option value="https://download.pytorch.org/whl/cu126">NVIDIA — CUDA 12.6</option>
+            <option value="https://download.pytorch.org/whl/cu124">NVIDIA — CUDA 12.4</option>
+            <option value="https://download.pytorch.org/whl/rocm6.2">AMD — ROCm 6.2</option>
+            <option value="https://download.pytorch.org/whl/cpu">CPU only</option>
+          </select>
+          <button class="btn" id="btnSaveTorch">Save</button>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Activity</h2>
+        <p class="sub" id="task-title">Nothing running.</p>
+        <div class="log" id="task-log"></div>
+        <div class="rowbtn"><button class="btn" id="btnCancelTask" hidden>Stop</button></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- settings popover -->
+<div class="pop" id="settingsPop" hidden>
+  <h3>Generation</h3>
+  <div class="orow"><span class="lab">Steps</span><div class="ctl"><div class="slider">
+    <input type="range" id="steps-sl" min="4" max="40" step="1" value="12">
+    <span class="v" id="stepsVal">12</span></div></div></div>
+  <div class="orow"><span class="lab">Shift</span><div class="ctl"><div class="slider">
+    <input type="range" id="shift-sl" min="1" max="20" step="0.5" value="12">
+    <span class="v" id="shiftVal">12.0</span></div></div></div>
+  <div class="orow"><span class="lab">Lip-sync strength</span><div class="ctl"><div class="slider">
+    <input type="range" id="acfg-sl" min="1" max="6" step="0.5" value="2">
+    <span class="v" id="acfgVal">2.0</span></div></div></div>
+  <div class="orow"><span class="lab">Audio scale</span><div class="ctl"><div class="slider">
+    <input type="range" id="ascale-sl" min="0.5" max="2" step="0.1" value="1">
+    <span class="v" id="ascaleVal">1.0</span></div></div></div>
+  <div class="orow"><span class="lab">Distill LoRA</span><div class="ctl"><div class="slider">
+    <input type="range" id="lora-sl" min="0" max="1.5" step="0.05" value="1">
+    <span class="v" id="loraVal">1.00</span></div></div></div>
+  <div class="orow"><span class="lab">Block swap</span><div class="ctl"><div class="slider">
+    <input type="range" id="swap-sl" min="0" max="48" step="1" value="40">
+    <span class="v" id="swapVal">40 / 48</span></div></div></div>
+  <div class="orow"><span class="lab">Weights in memory</span><div class="ctl">
+    <select id="quant-sel">
+      <option value="fp8_e4m3fn">fp8 (half the memory)</option>
+      <option value="disabled">bf16 (full)</option>
+    </select></div></div>
+  <div class="orow"><span class="lab">Attention</span><div class="ctl">
+    <select id="attn-sel"><option value="sdpa">sdpa</option></select></div></div>
+  <div class="orow"><span class="lab">Isolate the voice</span><div class="ctl">
+    <div class="chips" id="segVoice">
+      <button data-v="off">Off</button><button class="on" data-v="on">On</button>
+    </div></div></div>
+  <div class="orow"><span class="lab">Tiled VAE</span><div class="ctl">
+    <div class="chips" id="segTiled">
+      <button data-v="off">Off</button><button class="on" data-v="on">On</button>
+    </div></div></div>
+  <div class="orow"><span class="lab">Text encoder on</span><div class="ctl">
+    <div class="chips" id="segT5">
+      <button class="on" data-v="cpu">CPU</button><button data-v="gpu">GPU</button>
+    </div></div></div>
+  <div class="orow"><span class="lab">Seed</span><div class="ctl">
+    <input type="text" id="seed" placeholder="random each time" inputmode="numeric">
+    <button class="btn thin" id="btnSeedClear" title="Back to a random seed">Clear</button></div></div>
+  <div class="orow" style="display:block"><span class="lab">Avoid (negative prompt)</span>
+    <textarea id="neg-prompt" rows="3" spellcheck="false" style="margin-top:7px"></textarea></div>
+  <p class="note" id="costNote"></p>
+  <div class="rowbtn"><button class="btn thin" id="btnResetOpts">Back to defaults</button>
+    <button class="btn thin" id="btnCloseSettings">Done</button></div>
+</div>
+
+<!-- lightbox -->
+<div class="lightbox" id="lightbox" hidden>
+  <div class="stage"><video id="lbVideo" controls loop playsinline></video></div>
+  <div class="side">
+    <h3 id="lbTitle">Clip</h3>
+    <div class="pr" id="lbPrompt"></div>
+    <div id="lbMeta"></div>
+    <div class="lbacts">
+      <button class="btn go" id="lbReuse">Reuse picture and speech</button>
+      <button class="btn" id="lbVary">New seed</button>
+      <button class="btn" id="lbDownload">Download</button>
+      <button class="btn" id="lbDelete">Delete</button>
+      <button class="btn" id="lbClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- setup -->
+<div class="veil" id="veil-setup" hidden>
+  <div class="sheet">
+    <h1>Set up the engine</h1>
+    <p class="lede">Avatar Studio runs LongCat-Avatar on this machine through
+      ComfyUI. The first run installs ComfyUI, adds kijai's WanVideoWrapper,
+      KJNodes and MelBandRoFormer, and downloads the weights — around 42 GB.
+      The preflight below says what your hardware will make of that.</p>
+    <div id="setup-choice">
+      <div class="pick" id="pick-list"></div>
+      <label class="flab" style="margin-top:6px">How the model sits in memory</label>
+      <div class="pick" id="precision-list"></div>
+      <div class="grid2">
+        <div class="switch"><label for="opt-melband">MelBandRoFormer (voice isolation)</label>
+          <input type="checkbox" id="opt-melband" checked></div>
+        <div class="switch"><label for="opt-manager">ComfyUI-Manager</label>
+          <input type="checkbox" id="opt-manager" checked></div>
+        <div class="switch"><label for="opt-lowvram">Low-VRAM mode</label>
+          <input type="checkbox" id="opt-lowvram" checked></div>
+      </div>
+      <div id="preflight-setup" class="note"></div>
+      <div class="rowbtn">
+        <button class="btn go" id="btnRunSetup">Start setup</button>
+        <button class="btn" id="btnSkipSetup">Not now</button>
+      </div>
+      <p class="note">No Git or Python yet? The Engine page installs them for you.</p>
+    </div>
+    <div id="setup-progress" hidden>
+      <div class="steps" id="step-list"></div>
+      <div class="log" id="setup-log"></div>
+      <div class="rowbtn">
+        <button class="btn go" id="setup-done" hidden>Start creating</button>
+        <button class="btn" id="setup-retry" hidden>Try again</button>
+        <button class="btn" id="setup-hide">Hide</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- settings sheet -->
+<div class="veil" id="veil-settings" hidden>
+  <div class="sheet">
+    <h1>Settings</h1>
+    <p class="lede">Where the engine lives and how it starts.</p>
+    <div class="grid2">
+      <div><label class="flab" for="cfg-url">ComfyUI address</label>
+        <input type="text" id="cfg-url"></div>
+      <div><label class="flab" for="cfg-models">Models folder</label>
+        <input type="text" id="cfg-models"></div>
+      <div><label class="flab" for="cfg-dir">ComfyUI folder</label>
+        <input type="text" id="cfg-dir"></div>
+      <div class="switch" style="align-self:end"><label for="cfg-auto">Start ComfyUI with Avatar Studio</label>
+        <input type="checkbox" id="cfg-auto"></div>
+    </div>
+    <div class="rowbtn">
+      <button class="btn go" id="btnSaveCfg">Save</button>
+      <button class="btn js-start" id="btnStartComfy">Start ComfyUI now</button>
+      <button class="btn" id="btnCloseCfg">Close</button>
+    </div>
+    <p class="note" id="cfg-note"></p>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+"use strict";
+
+/* ========================= state ========================= */
+var S = {
+  view: "create", size: "832x480", image: null, audio: null,
+  status: null, jobs: [], images: [], libFilter: "", batch: 1,
+  setupCursor: 0, taskId: null, taskCursor: 0, setupSeen: false, lightbox: null,
+  rec: null
+};
+function $(id) { return document.getElementById(id); }
+async function api(path, opts) {
+  var r = await fetch(path, opts), b = null;
+  try { b = await r.json(); } catch (e) { b = null; }
+  if (!r.ok) throw new Error((b && b.error) || ("Request failed: " + r.status));
+  return b;
+}
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; });
+}
+function fmtSize(b) {
+  if (!b) return "—";
+  if (b >= 1e9) return (b / 1e9).toFixed(2) + " GB";
+  if (b >= 1e6) return (b / 1e6).toFixed(0) + " MB";
+  return (b / 1e3).toFixed(0) + " KB";
+}
+function fmtSec(s) {
+  s = Number(s) || 0;
+  return s >= 60 ? Math.floor(s / 60) + ":" + ("0" + Math.round(s % 60)).slice(-2)
+                 : s.toFixed(1) + " s";
+}
+var toastTimer = null;
+function toast(msg, bad) {
+  var t = $("toast");
+  t.textContent = msg; t.classList.toggle("bad", !!bad); t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { t.hidden = true; }, bad ? 8000 : 3500);
+}
+function store(k, v) {
+  try {
+    if (v === undefined) return JSON.parse(localStorage.getItem(k));
+    localStorage.setItem(k, JSON.stringify(v));
+  } catch (e) { return null; }
+}
+function grow(ta) {
+  ta.style.height = "auto";
+  ta.style.height = Math.min(ta.scrollHeight, 200) + "px";
+}
+function inputUrl(name) { return "/api/input?name=" + encodeURIComponent(name); }
+
+/* ========================= the frame maths =========================
+   Mirrors comfy.py: 16 fps, 93-frame windows, each later window re-using
+   the last 13 frames of the one before, so it adds 80. */
+var FPS = 16, WINDOW = 93, OVERLAP = 13, STEP = WINDOW - OVERLAP, MAX_SECONDS = 3600;
+var SIZES = { "832x480": [832, 480], "480x832": [480, 832], "640x640": [640, 640],
+              "1280x720": [1280, 720], "720x1280": [720, 1280] };
+var DEFAULT_NEGATIVE = "Close-up, bright tones, overexposed, static, blurred " +
+  "details, subtitles, style, works, paintings, images, static, overall gray, " +
+  "worst quality, low quality, JPEG compression residue, ugly, incomplete, " +
+  "extra fingers, poorly drawn hands, poorly drawn faces, deformed, " +
+  "disfigured, misshapen limbs, fused fingers, still picture, messy " +
+  "background, three legs, many people in the background, walking backwards";
+function frameCount(sec) {
+  return Math.max(1, Math.ceil(Math.round(sec * FPS * 1e6) / 1e6));
+}
+function windowCount(frames) {
+  return 1 + Math.max(0, Math.ceil((frames - WINDOW) / STEP));
+}
+// comfy.frame_ram(): decoded frames are float32 RGB, about four copies alive
+// while the windows are joined (measured on a real ComfyUI). A long clip is
+// rendered in parts that each fit PART_BUDGET, so memory does not grow with
+// length — comfy.plan() / windows_per_part()
+var FRAME_COPIES = 4, PART_BUDGET = 4 * 1024 * 1024 * 1024;
+function frameRam(frames, w, h) { return frames * w * h * 3 * 4 * FRAME_COPIES; }
+function framesFitting(w, h) {
+  return Math.floor(PART_BUDGET / (w * h * 3 * 4 * FRAME_COPIES));
+}
+function windowsPerPart(w, h) {
+  return Math.max(1, 1 + Math.floor((framesFitting(w, h) - WINDOW) / STEP));
+}
+// The stretch of audio a clip is made from: from the start offset, for the
+// chosen length or to the end, never past two minutes.
+function clipSeconds() {
+  if (!S.audio || !S.audio.duration) return 0;
+  var start = Math.max(0, Number($("trimStart").value) || 0);
+  var left = Math.max(0, S.audio.duration - start);
+  var len = Number($("trimLen").value);
+  if (len > 0) left = Math.min(left, len);
+  return Math.min(left, MAX_SECONDS);
+}
+function setSize(key) {
+  S.size = SIZES[key] ? key : "832x480";
+  $("segSize").querySelectorAll("button").forEach(function (b) {
+    b.classList.toggle("on", b.dataset.v === S.size); });
+}
+function syncPlan() {
+  var sec = clipSeconds(), d = SIZES[S.size];
+  var note = $("planNote");
+  if (!S.audio) {
+    note.innerHTML = "Add a picture and some speech. The clip is as long as " +
+      "the speech, however long; the lips follow the audio and the " +
+      "prompt steers everything else.";
+  } else if (!sec) {
+    note.innerHTML = '<span class="bad-text">The start is past the end of the ' +
+      "audio.</span>";
+  } else {
+    var f = frameCount(sec), w = windowCount(f);
+    var per = windowsPerPart(d[0], d[1]), parts = Math.ceil(w / per);
+    var ram = frameRam(WINDOW + (Math.min(per, w) - 1) * STEP, d[0], d[1]);
+    var mins = Math.floor(sec / 60);
+    note.innerHTML = "<b>" + d[0] + "×" + d[1] + "</b> · <b>" +
+      (mins ? mins + " min " + Math.round(sec % 60) + " s" : sec.toFixed(1) + " s") +
+      "</b> of speech → " + f + " frames at 16 fps, rendered as <b>" + w +
+      " window" + (w > 1 ? "s" : "") + "</b> of 93 frames (5.8 s each" +
+      (w > 1 ? ", every later one re-using the last 13 frames" : "") + ")" +
+      (parts > 1 ? ', in <b id="partsNote">' + parts + " parts</b> joined into " +
+        "one clip at the end" : "") +
+      ". The frames need about <b>" + (ram / 1073741824).toFixed(1) +
+      " GB</b> of RAM" + (parts > 1 ? " — the same for any length" : "") + ".";
+  }
+  var cost = $("costNote");
+  if (cost) {
+    cost.textContent = "Each window is " + $("steps-sl").value + " steps" +
+      (Number($("acfg-sl").value) !== 1
+        ? ", and lip-sync strength above 1 adds a pass per step" : "") +
+      ". Block swap keeps " + $("swap-sl").value + " of the model's 48 blocks " +
+      "in system RAM — higher is slower but fits a smaller card.";
+  }
+  saveDraft();
+}
+
+/* ========================= draft ========================= */
+function segOn(id) {
+  var b = $(id) && $(id).querySelector("button.on");
+  return b ? b.dataset.v : "";
+}
+function setSeg(id, v) {
+  if (!v) return;
+  $(id).querySelectorAll("button").forEach(function (b) {
+    b.classList.toggle("on", b.dataset.v === v); });
+}
+var SLIDERS = [
+  ["steps-sl", "stepsVal", function (v) { return String(v); }, 12],
+  ["shift-sl", "shiftVal", function (v) { return v.toFixed(1); }, 12],
+  ["acfg-sl", "acfgVal", function (v) { return v.toFixed(1); }, 2],
+  ["ascale-sl", "ascaleVal", function (v) { return v.toFixed(1); }, 1],
+  ["lora-sl", "loraVal", function (v) { return v.toFixed(2); }, 1],
+  ["swap-sl", "swapVal", function (v) { return v + " / 48"; }, 40]
+];
+function setSlider(row, value) {
+  $(row[0]).value = value;
+  $(row[1]).textContent = row[2](Number($(row[0]).value));
+}
+var draftReady = false;
+function saveDraft() {
+  if (!draftReady) return;
+  var d = { v: 1, prompt: $("description").value, size: S.size,
+    image: S.image ? { name: S.image.name } : null,
+    audio: S.audio ? { name: S.audio.name, label: S.audio.label,
+                       duration: S.audio.duration } : null,
+    start: $("trimStart").value, len: $("trimLen").value,
+    quant: $("quant-sel").value, attn: $("attn-sel").value,
+    voice: segOn("segVoice"), tiled: segOn("segTiled"), t5: segOn("segT5"),
+    negative: $("neg-prompt").value };
+  SLIDERS.forEach(function (r) { d[r[0]] = $(r[0]).value; });
+  store("avatar.draft", d);
+}
+function loadDraft() {
+  var d = store("avatar.draft");
+  $("neg-prompt").value = DEFAULT_NEGATIVE;
+  if (d) {
+    $("description").value = d.prompt || "";
+    setSize(d.size);
+    if (d.image && d.image.name) setImage(d.image.name, inputUrl(d.image.name));
+    if (d.audio && d.audio.name) setAudio(d.audio, inputUrl(d.audio.name));
+    $("trimStart").value = d.start || "0";
+    $("trimLen").value = d.len || "";
+    SLIDERS.forEach(function (r) { if (d[r[0]] != null) setSlider(r, d[r[0]]); });
+    if (d.quant) $("quant-sel").value = d.quant;
+    if (d.attn) $("attn-sel").dataset.want = d.attn;
+    setSeg("segVoice", d.voice); setSeg("segTiled", d.tiled); setSeg("segT5", d.t5);
+    if (d.negative) $("neg-prompt").value = d.negative;
+  }
+  draftReady = true;
+  grow($("description"));
+}
+
+/* ========================= the picture ========================= */
+function setImage(name, url) {
+  S.image = name ? { name: name, url: url } : null;
+  $("imgThumb").hidden = !S.image;
+  $("imgEmpty").hidden = !!S.image;
+  $("imgClear").hidden = !S.image;
+  if (S.image) {
+    $("imgThumb").src = url;
+    $("imgThumb").onerror = function () {
+      // gone from ComfyUI/input (a fresh install): say so, keep the name
+      $("imgThumb").hidden = true; $("imgEmpty").hidden = false;
+      $("imgEmpty").innerHTML = "Picture not found<br><span class=\"hint\">" +
+        esc(name) + "</span>";
+    };
+  } else {
+    $("imgThumb").removeAttribute("src");
+    $("imgEmpty").innerHTML = '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" ' +
+      'height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 ' +
+      '21"/></svg><br>Add a picture<br><span class="hint">face clearly visible</span>';
+  }
+  saveDraft();
+}
+async function uploadFile(file, name) {
+  var fd = new FormData();
+  fd.append("file", file, name || file.name);
+  return (await api("/api/upload", { method: "POST", body: fd })).name;
+}
+async function pickImage(file) {
+  if (!file) return;
+  if (!/^image\//.test(file.type)) { toast("That is not a picture.", true); return; }
+  try {
+    var name = await uploadFile(file);
+    setImage(name, URL.createObjectURL(file));
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ========================= the speech ========================= */
+function setAudio(a, url) {
+  S.audio = a ? { name: a.name, label: a.label || a.name, duration: a.duration || 0 }
+              : null;
+  var player = $("audioPlayer");
+  player.hidden = !S.audio;
+  $("trimRow").hidden = !S.audio;
+  $("audioClear").hidden = !S.audio;
+  if (S.audio) {
+    player.src = url;
+    // the player knows the length of anything the browser can play; a
+    // file it cannot decode keeps the length measured when it was added
+    player.onloadedmetadata = function () {
+      if (isFinite(player.duration) && player.duration > 0) {
+        S.audio.duration = player.duration; syncAudioInfo(); syncPlan();
+      }
+    };
+  } else {
+    player.removeAttribute("src"); player.load();
+  }
+  syncAudioInfo();
+  syncPlan();
+}
+function syncAudioInfo() {
+  $("audioInfo").textContent = S.audio
+    ? S.audio.label.slice(0, 40) + (S.audio.duration ? " · " + fmtSec(S.audio.duration) : "")
+    : "No audio yet";
+}
+function measure(file) {
+  // decodeAudioData reads most audio and the soundtrack of most videos
+  return file.arrayBuffer().then(function (buf) {
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    var ctx = new Ctx();
+    return ctx.decodeAudioData(buf).then(function (data) {
+      ctx.close(); return data.duration;
+    }, function () { ctx.close(); return 0; });
+  }).catch(function () { return 0; });
+}
+async function pickAudio(file) {
+  if (!file) return;
+  try {
+    var duration = await measure(file);
+    var name = await uploadFile(file);
+    setAudio({ name: name, label: file.name, duration: duration },
+             URL.createObjectURL(file));
+    if (!duration) toast("Added. The browser could not measure it — press play " +
+                         "once so its length is known.");
+  } catch (e) { toast(e.message, true); }
+}
+// A recording becomes a plain 16-bit WAV before it leaves the page: every
+// ComfyUI build reads WAV, not every one reads the browser's webm/opus.
+function wavFrom(buffer) {
+  var ch = buffer.numberOfChannels, len = buffer.length, rate = buffer.sampleRate;
+  var mono = new Float32Array(len);
+  for (var c = 0; c < ch; c++) {
+    var d = buffer.getChannelData(c);
+    for (var i = 0; i < len; i++) mono[i] += d[i] / ch;
+  }
+  var out = new DataView(new ArrayBuffer(44 + len * 2));
+  function str(o, s) { for (var k = 0; k < s.length; k++) out.setUint8(o + k, s.charCodeAt(k)); }
+  str(0, "RIFF"); out.setUint32(4, 36 + len * 2, true); str(8, "WAVE");
+  str(12, "fmt "); out.setUint32(16, 16, true); out.setUint16(20, 1, true);
+  out.setUint16(22, 1, true); out.setUint32(24, rate, true);
+  out.setUint32(28, rate * 2, true); out.setUint16(32, 2, true);
+  out.setUint16(34, 16, true); str(36, "data"); out.setUint32(40, len * 2, true);
+  for (var j = 0; j < len; j++) {
+    var v = Math.max(-1, Math.min(1, mono[j]));
+    out.setInt16(44 + j * 2, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+  }
+  return new Blob([out.buffer], { type: "audio/wav" });
+}
+async function toggleRecord() {
+  if (S.rec) { S.rec.stop(); return; }
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    toast("This browser cannot record here.", true); return;
+  }
+  var stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (e) { toast("No microphone: " + e.message, true); return; }
+  var chunks = [], rec = new MediaRecorder(stream), started = Date.now();
+  var tick = setInterval(function () {
+    $("recLabel").textContent = "Stop · " + fmtSec((Date.now() - started) / 1000);
+  }, 250);
+  rec.ondataavailable = function (e) { if (e.data.size) chunks.push(e.data); };
+  rec.onstop = async function () {
+    clearInterval(tick);
+    stream.getTracks().forEach(function (t) { t.stop(); });
+    S.rec = null;
+    $("btnRecord").classList.remove("rec");
+    $("recLabel").textContent = "Record";
+    try {
+      var raw = new Blob(chunks, { type: rec.mimeType || "audio/webm" });
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      var ctx = new Ctx();
+      var data = await ctx.decodeAudioData(await raw.arrayBuffer());
+      ctx.close();
+      var wav = wavFrom(data);
+      var stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      var name = await uploadFile(wav, "recording-" + stamp + ".wav");
+      setAudio({ name: name, label: "Recording " + fmtSec(data.duration),
+                 duration: data.duration }, URL.createObjectURL(wav));
+      $("trimStart").value = "0"; $("trimLen").value = "";
+      syncPlan();
+    } catch (e) { toast("Could not keep the recording: " + e.message, true); }
+  };
+  rec.start();
+  S.rec = rec;
+  $("btnRecord").classList.add("rec");
+  $("recLabel").textContent = "Stop";
+}
+
+/* ========================= views ========================= */
+function show(view) {
+  S.view = view;
+  document.querySelectorAll("[data-page]").forEach(function (p) {
+    p.hidden = p.dataset.page !== view; });
+  document.querySelectorAll(".nav[data-view]").forEach(function (b) {
+    if (b.dataset.view === view) b.setAttribute("aria-current", "page");
+    else b.removeAttribute("aria-current"); });
+  closePops();
+  $("mainCol").scrollTop = 0;
+  if (view === "models") { loadHf(); loadLocal(); pollTasks(); }
+  if (view === "engine") { loadDeps(); loadPreflight(); pollTasks(); pollEngineLog(); }
+  if (view === "library") renderLib();
+  if (view === "create") requestAnimationFrame(function () {
+    syncPlan(); renderFeed(); grow($("description")); });
+}
+function closePops() { $("settingsPop").hidden = true; }
+function placePop(pop, anchor) {
+  pop.hidden = false;
+  var r = anchor.getBoundingClientRect();
+  var w = pop.offsetWidth;
+  pop.style.top = Math.max(12, Math.min(r.bottom + 8,
+    window.innerHeight - pop.offsetHeight - 12)) + "px";
+  pop.style.left = Math.max(12, Math.min(r.left, window.innerWidth - w - 12)) + "px";
+}
+
+/* ========================= generate ========================= */
+function collect() {
+  var seed = $("seed").value.trim();
+  return {
+    prompt: $("description").value.trim(),
+    negative: $("neg-prompt").value.trim(),
+    image: S.image ? S.image.name : "",
+    audio: S.audio ? S.audio.name : "",
+    audio_label: S.audio ? S.audio.label : "",
+    audio_start: Math.max(0, Number($("trimStart").value) || 0),
+    audio_seconds: Number(clipSeconds().toFixed(3)),
+    size: S.size,
+    steps: Number($("steps-sl").value),
+    shift: Number($("shift-sl").value),
+    audio_cfg: Number($("acfg-sl").value),
+    audio_scale: Number($("ascale-sl").value),
+    lora_strength: Number($("lora-sl").value),
+    blocks_to_swap: Number($("swap-sl").value),
+    quantization: $("quant-sel").value,
+    attention: $("attn-sel").value,
+    isolate_voice: segOn("segVoice") !== "off",
+    tiled_vae: segOn("segTiled") !== "off",
+    t5_cpu: segOn("segT5") !== "gpu",
+    seed: /^\d+$/.test(seed) ? Number(seed) : null,
+    runs: S.batch
+  };
+}
+// Why a render cannot start, and where that is fixed. Setup is only for a
+// machine that was never set up: an engine that is merely stopped must not
+// be offered a fresh 42 GB install.
+function blockedFromRendering() {
+  var st = S.status;
+  if (st && st.ready) return false;
+  if (!st) { toast("Still connecting to the app — try again in a moment.", true); }
+  else if (!st.setup_complete) { openSetup(); }
+  else if (!st.comfy_online) {
+    show("engine");
+    toast("ComfyUI is not running. Press Start ComfyUI here, then Generate.", true);
+  } else if ((st.missing_models || []).length) {
+    show("models");
+    toast("Weights missing: " + st.missing_models.join(", ") +
+          ". Download them here.", true);
+  } else if (!st.nodes_ready) {
+    show("engine");
+    toast("ComfyUI is running without " + ((st.missing_nodes || []).join(", ")
+          || "the LongCat Avatar nodes") + ". Install or update the nodes, then "
+          + "press Restart ComfyUI.", true);
+  } else {
+    show("engine");
+    toast("ComfyUI is not ready yet — see the Engine page.", true);
+  }
+  return true;
+}
+async function generate() {
+  if (!S.image) { show("create"); toast("Add a picture of the person first.", true); return; }
+  if (!S.audio) { show("create"); toast("Add the speech — record it, or choose an audio file.", true); return; }
+  if (!clipSeconds()) {
+    show("create");
+    toast(S.audio.duration ? "The start is past the end of the audio."
+          : "The audio's length is not known yet — press play on it once.", true);
+    return;
+  }
+  if (blockedFromRendering()) return;
+  var p = collect();
+  show("create");
+  $("btnGenerate").disabled = true;
+  try {
+    await api("/api/generate", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
+    pollJobs();
+  } catch (e) { toast(e.message, true); }
+  finally { $("btnGenerate").disabled = false; }
+}
+var jobTimer = null, jobPolling = false, pollAgain = false;
+async function pollJobs() {
+  // one loop at a time; a call that lands mid-poll runs once more after
+  if (jobPolling) { pollAgain = true; return; }
+  jobPolling = true;
+  try {
+    do { pollAgain = false; await pollJobsOnce(); } while (pollAgain);
+  } finally { jobPolling = false; }
+}
+async function pollJobsOnce() {
+  clearTimeout(jobTimer);
+  var jobs;
+  try { jobs = await api("/api/jobs"); }
+  catch (e) { jobTimer = setTimeout(pollJobs, 3000); return; }
+  var justDone = jobs.filter(function (n) {
+    return n.status === "done" && S.jobs.some(function (o) {
+      return o.id === n.id && o.status === "running"; }); })[0];
+  S.jobs = jobs;
+  if (justDone) {
+    await loadImages();
+    var note = justDone.images && justDone.images[0] && justDone.images[0].note;
+    toast(note || "Clip ready.", !!note);
+  }
+  renderFeed();
+  if (jobs.some(function (j) { return j.status === "running"; }))
+    jobTimer = setTimeout(pollJobs, 1500);
+  else await loadImages();
+}
+
+/* ========================= feed and grids ========================= */
+function tile(im) {
+  var el = document.createElement("div");
+  el.className = "tile";
+  el.innerHTML = '<video src="/api/clip/' + esc(im.id) + '" muted loop playsinline ' +
+    'preload="metadata" style="width:100%;display:block;aspect-ratio:' +
+    (Number(im.width) || 16) + "/" + (Number(im.height) || 9) + '"></video>' +
+    '<div class="acts">' +
+    '<button data-act="reuse" title="Reuse picture and speech"><svg viewBox="0 0 24 24">' +
+    '<path d="M4 9a8 8 0 0 1 14-4M20 15a8 8 0 0 1-14 4"/><path d="M18 4v5h-5M6 20v-5h5"/></svg></button>' +
+    '<button data-act="dl" title="Download"><svg viewBox="0 0 24 24">' +
+    '<path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></svg></button>' +
+    '<button data-act="del" title="Delete"><svg viewBox="0 0 24 24">' +
+    '<path d="M6 6l12 12M18 6 6 18"/></svg></button></div>' +
+    '<div class="over"><div class="cap">' + esc(im.prompt || im.title) + "</div>" +
+    '<div class="meta">' + esc(im.width || "?") + "×" + esc(im.height || "?") +
+    " · " + esc(im.seconds || "?") + " s · " + esc(im.windows || 1) + " window" +
+    (im.windows > 1 ? "s" : "") +
+    (im.seed == null ? "" : " · seed " + esc(im.seed)) + "</div></div>";
+  var vid = el.querySelector("video");
+  // without this a tile is black until hovered: nudge past zero for a frame
+  vid.addEventListener("loadedmetadata", function () {
+    try { vid.currentTime = 0.1; } catch (e) { /* not ready */ }
+  });
+  el.addEventListener("mouseenter", function () { vid.play().catch(function () {}); });
+  el.addEventListener("mouseleave", function () { vid.pause(); vid.currentTime = 0; });
+  vid.addEventListener("click", function () { openLightbox(im); });
+  el.tabIndex = 0;
+  el.setAttribute("role", "button");
+  el.setAttribute("aria-label", "Open " + (im.title || "clip"));
+  el.addEventListener("keydown", function (e) {
+    if (e.target === el && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault(); openLightbox(im);
+    }
+  });
+  el.querySelector(".over").addEventListener("click", function () { openLightbox(im); });
+  el.querySelectorAll("[data-act]").forEach(function (b) {
+    b.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      if (b.dataset.act === "reuse") reuse(im);
+      if (b.dataset.act === "dl") window.open("/api/clip/" + im.id, "_blank");
+      if (b.dataset.act === "del") removeImage(im);
+    });
+  });
+  return el;
+}
+function previewImg(job) {
+  if (job.status !== "running" || !job.preview) return "";
+  return '<img class="pv" alt="Live preview" src="/api/jobs/' +
+    encodeURIComponent(job.id) + "/preview?n=" + Number(job.preview) + '">';
+}
+function skeleton(job) {
+  var d = SIZES[job.size] || SIZES["832x480"];
+  var el = document.createElement("div");
+  el.className = "skel" + (job.status === "error" ? " bad" : "");
+  var pct = Math.round(job.pct || 0);
+  el.innerHTML = '<div class="ph" style="aspect-ratio:' + d[0] + "/" + d[1] + '">' +
+    previewImg(job) + "</div>" +
+    '<div class="lbl"><span>' + esc(job.status === "error"
+      ? (job.error || "Failed") : (job.stage || "Working…")) + "</span><span>" +
+    (job.status === "error" ? "" : pct + "%") + "</span></div>" +
+    (job.status === "error" ? "" :
+      '<div class="bar4"><i style="width:' + pct + '%"></i></div>');
+  if (job.status === "running") {
+    var b = document.createElement("button");
+    b.className = "btn thin";
+    b.textContent = "Stop";
+    b.style.marginTop = "9px";
+    b.addEventListener("click", function () {
+      api("/api/jobs/" + job.id + "/cancel", { method: "POST" }).catch(function () {});
+      toast("Stopping.");
+    });
+    el.appendChild(b);
+  }
+  return el;
+}
+function renderFeed() {
+  var box = $("feed");
+  box.innerHTML = "";
+  var running = S.jobs.filter(function (j) {
+    return j.status === "running" || j.status === "error"; });
+  running.forEach(function (j) { box.appendChild(skeleton(j)); });
+  if (!S.images.length && !running.length) {
+    box.innerHTML = '<div class="empty"><b>Nothing here yet</b>' +
+      "Add a picture and some speech above, then press Generate.</div>";
+    return;
+  }
+  S.images.slice(0, 60).forEach(function (im) { box.appendChild(tile(im)); });
+}
+function visibleImages(filter) {
+  var f = (filter || "").trim().toLowerCase();
+  if (!f) return S.images;
+  return S.images.filter(function (i) {
+    return ((i.title || "") + " " + (i.prompt || "") + " " + (i.audio_label || ""))
+      .toLowerCase().indexOf(f) >= 0; });
+}
+function renderLib() {
+  var box = $("libGrid");
+  var list = visibleImages(S.libFilter);
+  box.innerHTML = "";
+  if (!list.length) {
+    box.innerHTML = '<div class="empty"><b>Nothing here yet</b>' +
+      "Clips you make land here.</div>";
+    return;
+  }
+  list.forEach(function (im) { box.appendChild(tile(im)); });
+}
+async function loadImages() {
+  try { S.images = await api("/api/clips"); }
+  catch (e) { return; }
+  if (S.view === "create") renderFeed();
+  if (S.view === "library") renderLib();
+}
+function reuse(im) {
+  $("description").value = im.prompt || "";
+  if (im.image) setImage(im.image, inputUrl(im.image));
+  if (im.audio) {
+    setAudio({ name: im.audio, label: im.audio_label || im.audio,
+               duration: 0 }, inputUrl(im.audio));
+    $("trimStart").value = String(im.audio_start || 0);
+    $("trimLen").value = im.audio_seconds ? String(im.audio_seconds) : "";
+    // the length is the clip's own until the player measures the file
+    S.audio.duration = (Number(im.audio_start) || 0) + (Number(im.audio_seconds) || 0);
+  }
+  if (SIZES[im.size]) setSize(im.size);
+  if (im.steps) setSlider(SLIDERS[0], im.steps);
+  if (im.shift) setSlider(SLIDERS[1], im.shift);
+  if (im.audio_cfg) setSlider(SLIDERS[2], im.audio_cfg);
+  if (im.audio_scale) setSlider(SLIDERS[3], im.audio_scale);
+  closeLightbox();
+  show("create");
+  grow($("description"));
+  syncAudioInfo();
+  syncPlan();
+  toast("Picture, speech and settings loaded.");
+}
+async function removeImage(im) {
+  if (!confirm("Delete this clip?")) return;
+  // let go of the file first: on Windows a clip still streaming to a
+  // <video> cannot be deleted
+  if (S.lightbox && S.lightbox.id === im.id) closeLightbox();
+  document.querySelectorAll("video").forEach(function (v) {
+    if ((v.getAttribute("src") || "").indexOf("/api/clip/" + im.id) === 0) {
+      v.pause(); v.removeAttribute("src"); v.load();
+    }
+  });
+  try { await api("/api/clip/" + im.id, { method: "DELETE" }); }
+  catch (e) { toast(e.message, true); }
+  loadImages();
+}
+function closeLightbox() {
+  $("lightbox").hidden = true;
+  $("lbVideo").pause();
+  S.lightbox = null;
+}
+function openLightbox(im) {
+  S.lightbox = im;
+  var vid = $("lbVideo");
+  vid.src = "/api/clip/" + im.id;
+  $("lbTitle").textContent = im.title || "Clip";
+  $("lbPrompt").textContent = im.prompt || "(no prompt)";
+  function short(x) {
+    return String(x || "").split(/[\\/]/).pop().replace(/\.safetensors$/, "");
+  }
+  var rows = [["Size", (im.width || "?") + " × " + (im.height || "?")],
+              ["Length", (im.seconds || "?") + " s · " + (im.frames || "?") +
+               " frames · " + (im.windows || 1) + " window" + (im.windows > 1 ? "s" : "")],
+              ["Speech", (im.audio_label || short(im.audio)) +
+               (im.audio_start ? " from " + fmtSec(im.audio_start) : "")],
+              ["Seed", im.seed == null ? "—" : im.seed],
+              ["Steps", im.steps || "—"],
+              ["Lip-sync strength", im.audio_cfg || "—"],
+              ["Weights", im.quantization === "disabled" ? "bf16" : "fp8"],
+              ["Model", short(im.model) || "—"]];
+  if (im.parts > 1) rows.push(["Rendered in", im.parts + " parts, joined"]);
+  if (im.lora) rows.push(["Distill LoRA", short(im.lora)]);
+  if (im.note) rows.push(["Note", im.note]);
+  $("lbMeta").innerHTML = rows.map(function (r) {
+    return '<div class="kv"><span>' + esc(r[0]) + "</span><b>" + esc(r[1]) +
+      "</b></div>"; }).join("");
+  $("lightbox").hidden = false;
+}
+
+/* ========================= preflight ========================= */
+async function loadPreflight() {
+  var d;
+  try { d = await api("/api/preflight"); } catch (e) { return; }
+  var tone = d.verdict === "ok" ? "ok" : d.verdict === "tight" ? "warn" : "missing";
+  var GIB = 1024 * 1024 * 1024;
+  var rows = [
+    ["GPU", (d.gpu || "not detected") +
+     (d.vram ? " · " + (d.vram / GIB).toFixed(0) + " GB VRAM" : "")],
+    ["System RAM", d.ram ? (d.ram / GIB).toFixed(0) + " GB" : "unknown"],
+    ["Free disk", d.free_disk ? (d.free_disk / 1e9).toFixed(0) + " GB" : "unknown"],
+    ["Download", d.download ? "≈ " + (d.download / 1e9).toFixed(0) + " GB" : "unknown"],
+    ["Peak resident", d.peak ? "≈ " + (d.peak / 1e9).toFixed(0) + " GB" : "unknown"]];
+  var html = '<div class="fitem"><div class="n"><b>' +
+    (d.verdict === "ok" ? "Should run" : d.verdict === "tight"
+      ? "Tight, but workable" : "Not enough headroom") + "</b><span>" +
+    esc(d.precision) + ' in memory</span></div><div class="right"><span class="state ' +
+    tone + '">' + esc(d.verdict) + "</span></div></div>" +
+    rows.map(function (r) {
+      return '<div class="kv"><span>' + esc(r[0]) + "</span><b>" + esc(r[1]) +
+        "</b></div>"; }).join("") +
+    (d.notes || []).map(function (n) {
+      return '<p class="note">' + esc(n) + "</p>"; }).join("");
+  [$("preflight"), $("preflight-setup")].forEach(function (b) { b.innerHTML = html; });
+}
+
+/* ========================= engine page ========================= */
+var depsBusy = null;
+function loadDeps() {
+  if (!depsBusy) depsBusy = fetchDeps().finally(function () { depsBusy = null; });
+  return depsBusy;
+}
+async function fetchDeps() {
+  var box = $("dep-list");
+  var btn = $("btnRecheck");
+  btn.disabled = true; btn.textContent = "Checking…";
+  try {
+    var d = await api("/api/deps");
+    $("torch-index").value = d.torch_index || "";
+    box.innerHTML = "";
+    var bad = 0;
+    d.items.forEach(function (it) {
+      if (it.state === "missing") bad++;
+      if (it.id === "engine") S.depsOnline = it.state === "ok";
+      var el = document.createElement("div");
+      el.className = "fitem";
+      el.innerHTML = '<div class="n"><b>' + esc(it.label) + "</b><span>" +
+        esc(it.detail || "") + (it.hint ? " — " + esc(it.hint) : "") +
+        '</span></div><div class="right"><span class="state ' + esc(it.state) + '">' +
+        esc(it.state) + "</span></div>";
+      var right = el.querySelector(".right");
+      if (it.action === "models") {
+        right.appendChild(mkBtn("Open Models", function () { show("models"); }));
+      } else if (it.action === "start") {
+        var sb = mkBtn("Start", startEngine);
+        sb.classList.add("js-start");
+        right.appendChild(sb);
+      } else if (it.action) {
+        var label = it.action === "update" ? "Update"
+          : it.action === "reinstall" ? "Reinstall" : "Install";
+        var b = mkBtn(label, function () { installDep(it.id, b); });
+        if (it.state === "missing") b.className = "btn thin go";
+        right.appendChild(b);
+      }
+      box.appendChild(el);
+    });
+    $("engineTag").hidden = bad === 0;
+  } catch (e) {
+    box.innerHTML = '<div class="empty bad-text">' + esc(e.message) + "</div>";
+  } finally {
+    btn.disabled = false; btn.textContent = "Recheck";
+  }
+}
+function mkBtn(label, fn) {
+  var b = document.createElement("button");
+  b.className = "btn thin";
+  b.textContent = label;
+  b.addEventListener("click", fn);
+  return b;
+}
+async function installDep(id, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "Working…"; }
+  try {
+    var r = await api("/api/deps/" + encodeURIComponent(id) + "/install",
+      { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ torch_index: $("torch-index").value }) });
+    S.taskId = r.task.id; S.taskCursor = 0; $("task-log").textContent = "";
+    pollTasks();
+  } catch (e) {
+    toast(e.message, true);
+    if (btn) { btn.disabled = false; btn.textContent = "Install"; }
+  }
+}
+function waitForTask(id) {
+  return new Promise(function (resolve) {
+    var tick = async function () {
+      try {
+        var t = await api("/api/tasks?id=" + id + "&since=99999");
+        if (t.state === "running") { setTimeout(tick, 1500); return; }
+        resolve(t.state === "done");
+      } catch (e) { resolve(false); }
+    };
+    tick();
+  });
+}
+async function installAllMissing() {
+  var order = ["git", "comfyui", "node:wrapper", "node:kjnodes", "node:melband",
+               "node:manager", "torch"];
+  try {
+    var d = await api("/api/deps");
+    var missing = order.filter(function (id) {
+      return d.items.some(function (i) { return i.id === id && i.state === "missing"; });
+    });
+    if (!missing.length) { toast("Nothing missing. Try Start ComfyUI."); return; }
+    toast("Installing " + missing.length + " item(s), one after another.");
+    for (var i = 0; i < missing.length; i++) {
+      var r = await api("/api/deps/" + encodeURIComponent(missing[i]) + "/install",
+        { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ torch_index: $("torch-index").value }) });
+      S.taskId = r.task.id; S.taskCursor = 0; $("task-log").textContent = "";
+      pollTasks();
+      var ok = await waitForTask(r.task.id);
+      if (!ok) { toast("Stopped at " + missing[i] + " — see the log.", true); return; }
+      await loadDeps();
+    }
+    toast("All set. Restart ComfyUI so it loads the nodes.");
+  } catch (e) { toast(e.message, true); }
+}
+async function startEngine() {
+  var btns = document.querySelectorAll(".js-start");
+  if (btns.length && btns[0].disabled) return;
+  btns.forEach(function (b) { b.disabled = true; b.dataset.label = b.textContent;
+                              b.textContent = "Starting…"; });
+  try {
+    var r = await api("/api/comfy/start", { method: "POST" });
+    if (r.already) {
+      toast("ComfyUI is already running. If it cannot see new weights or "
+            + "nodes, press Restart ComfyUI instead.");
+    } else {
+      toast("Starting ComfyUI — watch the Engine console. The first start is slow.");
+      show("engine");
+    }
+  } catch (e) { toast(e.message, true); }
+  finally {
+    btns.forEach(function (b) { b.disabled = false;
+                                b.textContent = b.dataset.label || b.textContent; });
+    refreshStatus();
+  }
+}
+async function restartEngine() {
+  var b = $("btnRestartEngine");
+  b.disabled = true;
+  b.textContent = "Restarting…";
+  try {
+    var r = await api("/api/comfy/restart", { method: "POST" });
+    if (r.how === "manager-reboot") {
+      toast("ComfyUI-Manager is rebooting the engine — it rescans models "
+            + "and loads new nodes on the way back up.");
+    } else if (r.how === "takeover") {
+      toast("That ComfyUI was not started here, so it was closed and a "
+            + "managed one is starting. Watch the console.");
+    } else if (r.how === "stopped") {
+      toast(r.note || "Stopped it.", true);
+    } else {
+      toast("Restarting ComfyUI — it rescans its model folders and loads "
+            + "new nodes now.");
+    }
+    show("engine");
+  } catch (e) { toast(e.message, true); }
+  finally {
+    b.disabled = false; b.textContent = "Restart ComfyUI";
+    refreshStatus();
+  }
+}
+var engineLogTimer = null;
+async function pollEngineLog() {
+  clearTimeout(engineLogTimer);
+  if (S.view !== "engine") return;
+  var d;
+  try { d = await api("/api/comfy/log?n=120"); }
+  catch (e) { engineLogTimer = setTimeout(pollEngineLog, 4000); return; }
+  var log = $("engine-log");
+  var text = (d.lines || []).join("\n");
+  if (text && log.textContent !== text) {
+    var bottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+    log.textContent = text;
+    if (bottom) log.scrollTop = log.scrollHeight;
+  }
+  var st = S.status || {};
+  var state;
+  if (st.stale_models && d.online) {
+    state = "⚠ The weights are on disk, but this ComfyUI started before "
+          + "they landed and has not rescanned. Press Restart ComfyUI.";
+  } else if (st.engine_mismatch && d.online) {
+    state = "⚠ A different ComfyUI is answering at " +
+      ((st.config || {}).comfy_url || "this address") +
+      (st.engine_argv ? " (" + st.engine_argv + ")" : "") +
+      ". Close it, or point Settings at the folder it runs from.";
+  } else if (st.engine_lowvram_off && d.online) {
+    state = "⚠ This ComfyUI was started without --lowvram. Press Restart "
+          + "ComfyUI so Avatar Studio starts it in low-VRAM mode.";
+  } else if (d.running) {
+    state = d.online ? "Running — started by Avatar Studio."
+                     : "Starting… the first start is slow.";
+  } else if (d.online) {
+    state = "Online, but started outside Avatar Studio — Restart ComfyUI "
+          + "will take it over.";
+  } else {
+    state = "Offline. Press Start ComfyUI.";
+  }
+  $("engine-state").textContent = state;
+  if (S.depsOnline !== undefined && S.depsOnline !== !!d.online) {
+    S.depsOnline = !!d.online;
+    loadDeps();
+  }
+  engineLogTimer = setTimeout(pollEngineLog, 2500);
+}
+var taskTimer = null;
+async function pollTasks() {
+  clearTimeout(taskTimer);
+  var list = [];
+  try { list = await api("/api/tasks"); } catch (e) { return; }
+  var dls = list.filter(function (t) { return t.kind === "download"; });
+  var box = $("dl-list");
+  box.innerHTML = dls.length ? "" : '<div class="empty">No downloads running.</div>';
+  dls.slice(0, 8).forEach(function (t) {
+    var el = document.createElement("div");
+    el.className = "fitem";
+    el.style.display = "block";
+    el.innerHTML = '<div style="display:flex;gap:10px;align-items:center">' +
+      '<div class="n"><b>' + esc(t.title) + "</b><span>" + esc(t.detail || t.state) +
+      '</span></div><div class="right"><span class="state ' +
+      (t.state === "done" ? "ok" : t.state === "error" ? "missing" : "") + '">' +
+      esc(t.state) + "</span></div></div>" +
+      '<div class="bar4"><i style="width:' + Math.round(t.pct) + '%"></i></div>';
+    if (t.state === "running") {
+      var b = mkBtn("Stop", function () {
+        api("/api/tasks/" + t.id + "/cancel", { method: "POST" }).then(pollTasks); });
+      b.style.marginTop = "8px";
+      el.appendChild(b);
+    }
+    box.appendChild(el);
+  });
+  if (!S.taskId) {
+    var run = list.filter(function (t) {
+      return t.state === "running" && t.kind === "dependency"; })[0];
+    if (run) { S.taskId = run.id; S.taskCursor = 0; }
+  }
+  if (S.taskId) {
+    try {
+      var t = await api("/api/tasks?id=" + S.taskId + "&since=" + S.taskCursor);
+      S.taskCursor = t.cursor;
+      $("task-title").textContent = t.title + " — " + (t.detail || t.state);
+      if (t.lines.length) {
+        var log = $("task-log");
+        var bottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+        log.textContent += t.lines.join("\n") + "\n";
+        if (bottom) log.scrollTop = log.scrollHeight;
+      }
+      $("btnCancelTask").hidden = t.state !== "running";
+      if (t.state !== "running") {
+        S.taskId = null;
+        loadDeps(); loadLocal(); refreshStatus();
+        toast(t.state === "done" ? t.title + " finished."
+          : t.title + " failed — check the log.", t.state !== "done");
+      }
+    } catch (e) { S.taskId = null; }
+  }
+  if (list.some(function (t) { return t.state === "running"; })) {
+    taskTimer = setTimeout(pollTasks, 1400);
+    if (S.view === "models") loadHf();
+  }
+}
+
+/* ========================= models page ========================= */
+async function loadHf() {
+  try {
+    var s = await api("/api/hf/settings");
+    $("hf-endpoint").value = s.endpoint;
+    if (document.activeElement !== $("hf-repo")) $("hf-repo").value = s.repo;
+    $("hf-token-note").textContent = s.token_set
+      ? "A token is saved (" + s.token_hint + "). Leave the box empty to keep it."
+      : "No token saved. The LongCat, Wan and wav2vec repos are public; a " +
+        "token is only needed for a gated mirror.";
+    $("models-dir-note").textContent = s.models_dir
+      ? "Stored under " + s.models_dir : "No models folder set yet — run setup first.";
+    var sel = $("hf-folder"), keep = sel.value;
+    sel.innerHTML = '<option value="">auto (as listed)</option>';
+    s.folders.forEach(function (f) {
+      var o = document.createElement("option");
+      o.value = f; o.textContent = f; sel.appendChild(o); });
+    sel.value = keep;
+    var c = s.curated;
+    var box = $("setsList");
+    box.innerHTML = "";
+    var head = document.createElement("div");
+    head.className = "setrow on";
+    head.innerHTML = '<div class="n"><b>LongCat Avatar set</b><span>' +
+      c.files.filter(function (f) { return f.installed; }).length + " of " +
+      c.files.length + ' files on disk</span></div><div class="right">' +
+      '<span class="state">≈ ' + (c.total / 1e9).toFixed(0) + " GB</span>" +
+      '<span class="state ' + (c.complete ? "ok" : "") + '">' +
+      (c.complete ? "ready" : "incomplete") + "</span></div>";
+    if (c.download) {
+      var b = mkBtn("Download what is missing", function () { downloadSet(b); });
+      b.className = "btn thin go";
+      head.querySelector(".right").appendChild(b);
+    }
+    box.appendChild(head);
+    c.files.forEach(function (f) {
+      var fe = document.createElement("div");
+      fe.className = "fitem";
+      fe.style.marginLeft = "14px";
+      fe.innerHTML = '<div class="n"><b>' + esc(f.name) + "</b><span>" +
+        esc(f.folder) + " · " + (f.approx ? "≈ " : "") + fmtSize(f.size) + " · " +
+        esc(f.why) + '</span></div><div class="right">' +
+        '<span class="state ' + (f.installed ? "ok" : f.role === "optional" ? "warn" : "missing") +
+        '">' + (f.installed ? "have it" : f.role === "optional" ? "optional" : "missing") +
+        "</span></div>";
+      box.appendChild(fe);
+    });
+    var pbox = $("precisionModels");
+    pbox.innerHTML = "";
+    Object.keys(c.precisions).forEach(function (key) {
+      var l = document.createElement("label");
+      l.innerHTML = '<input type="radio" name="precisionModels" value="' + esc(key) + '"' +
+        (key === c.precision ? " checked" : "") + "><span><b>" +
+        esc(c.precisions[key].label) + "</b><em>" + esc(c.precisions[key].note) +
+        "</em></span>";
+      l.querySelector("input").addEventListener("change", function () { usePrecision(key); });
+      pbox.appendChild(l);
+    });
+  } catch (e) { toast(e.message, true); }
+}
+async function usePrecision(key) {
+  try {
+    await api("/api/config", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ precision: key }) });
+    $("quant-sel").value = key === "bf16" ? "disabled" : "fp8_e4m3fn";
+    saveDraft(); refreshStatus();
+    toast(key === "bf16" ? "bf16 in memory — for 24 GB cards and 64 GB of RAM."
+                         : "fp8 in memory — half the RAM, for small cards.");
+  } catch (e) { toast(e.message, true); }
+}
+async function downloadSet(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "Starting…"; }
+  try {
+    var r = await api("/api/hf/download", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ set: true }) });
+    toast(r.note || ((r.tasks || []).length + " file(s) downloading."));
+    pollTasks(); loadHf();
+  } catch (e) {
+    toast(e.message, true);
+    if (btn) { btn.disabled = false; btn.textContent = "Download what is missing"; }
+  }
+}
+async function browseRepo() {
+  var box = $("repo-list");
+  box.innerHTML = '<div class="empty">Reading the repo…</div>';
+  try {
+    var d = await api("/api/hf/browse?repo=" +
+      encodeURIComponent($("hf-repo").value.trim()));
+    box.innerHTML = "";
+    d.files.slice(0, 60).forEach(function (f) {
+      var el = document.createElement("div");
+      el.className = "fitem";
+      el.innerHTML = '<div class="n"><b>' + esc(f.path) + "</b><span>" + fmtSize(f.size) +
+        " · goes to " + esc(f.folder) + (f.inset ? " · part of your set" : "") +
+        '</span></div><div class="right"></div>';
+      var right = el.querySelector(".right");
+      if (f.installed) {
+        right.innerHTML = '<span class="state ok">installed</span>';
+      } else {
+        var b = mkBtn("Download", function () {
+          startDownload(d.repo, f.path, $("hf-folder").value || f.folder, b); });
+        right.appendChild(b);
+      }
+      box.appendChild(el);
+    });
+  } catch (e) { box.innerHTML = '<div class="empty bad-text">' + esc(e.message) + "</div>"; }
+}
+async function startDownload(repo, path, folder, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "Starting…"; }
+  try {
+    await api("/api/hf/download", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repo: repo, path: path, folder: folder }) });
+    toast("Downloading " + path.split("/").pop());
+    pollTasks();
+  } catch (e) {
+    toast(e.message, true);
+    if (btn) { btn.disabled = false; btn.textContent = "Download"; }
+  }
+}
+async function loadLocal() {
+  try {
+    var d = await api("/api/hf/local");
+    var box = $("local-list");
+    box.innerHTML = "";
+    if (!d.models.length) {
+      box.innerHTML = '<div class="empty">No model files yet.</div>';
+      return;
+    }
+    d.models.forEach(function (m) {
+      var el = document.createElement("div");
+      el.className = "fitem";
+      el.innerHTML = '<div class="n"><b>' + esc(m.name) + "</b><span>" + esc(m.folder) +
+        " · " + fmtSize(m.size) + (m.partial ? " · unfinished" : "") +
+        '</span></div><div class="right"></div>';
+      el.querySelector(".right").appendChild(mkBtn("Delete", function () {
+        deleteModel(m.folder, m.name); }));
+      box.appendChild(el);
+    });
+  } catch (e) { /* not set up yet */ }
+}
+async function deleteModel(folder, name) {
+  if (!confirm("Delete " + name + " from disk?")) return;
+  try {
+    await api("/api/hf/local", { method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folder: folder, name: name }) });
+    loadHf(); loadLocal(); refreshStatus();
+    toast("Deleted.");
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ========================= setup ========================= */
+function openSetup() {
+  $("veil-setup").hidden = false;
+  $("setup-choice").hidden = false;
+  $("setup-progress").hidden = true;
+  renderPicks();
+}
+function renderPicks() {
+  var box = $("pick-list");
+  box.innerHTML = "";
+  var opts = [];
+  ((S.status && S.status.detected) || []).forEach(function (d) {
+    opts.push({ mode: "existing", dir: d, title: "Use the ComfyUI already here",
+                sub: d }); });
+  opts.push({ mode: "managed", dir: "",
+    title: "Install a fresh ComfyUI for Avatar Studio",
+    sub: "Downloads ComfyUI, adds WanVideoWrapper, KJNodes and MelBandRoFormer, " +
+         "builds its own Python environment and fetches the weights." });
+  opts.push({ mode: "external", dir: "",
+    title: "Connect to a ComfyUI I start myself",
+    sub: "Set the address and models folder in Settings first. Setup downloads " +
+         "the weights only; install the three node packs yourself." });
+  opts.forEach(function (o, i) {
+    var l = document.createElement("label");
+    l.innerHTML = '<input type="radio" name="setupmode" value="' + i + '"' +
+      (i === 0 ? " checked" : "") + "><span><b>" + esc(o.title) + "</b><em>" +
+      esc(o.sub) + "</em></span>";
+    box.appendChild(l);
+  });
+  box._opts = opts;
+  var pbox = $("precision-list");
+  pbox.innerHTML = "";
+  var precisions = (S.status && S.status.precisions) || {};
+  var current = (S.status && S.status.config && S.status.config.precision) || "fp8";
+  Object.keys(precisions).forEach(function (key) {
+    var l = document.createElement("label");
+    l.innerHTML = '<input type="radio" name="precision" value="' + esc(key) + '"' +
+      (key === current ? " checked" : "") + "><span><b>" +
+      esc(precisions[key].label) + "</b><em>" + esc(precisions[key].note) +
+      "</em></span>";
+    pbox.appendChild(l);
+  });
+  loadPreflight();
+}
+async function runSetup() {
+  var box = $("pick-list");
+  var sel = box.querySelector('input[name="setupmode"]:checked');
+  var opt = (box._opts || [])[sel ? Number(sel.value) : 0] || { mode: "managed", dir: "" };
+  var prec = document.querySelector('input[name="precision"]:checked');
+  $("setup-choice").hidden = true;
+  $("setup-progress").hidden = false;
+  $("setup-done").hidden = true;
+  $("setup-retry").hidden = true;
+  $("setup-log").textContent = "";
+  S.setupCursor = 0;
+  try {
+    await api("/api/setup/start", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: opt.mode, comfy_dir: opt.dir,
+        precision: prec ? prec.value : "fp8",
+        want_melband: $("opt-melband").checked,
+        want_manager: $("opt-manager").checked,
+        lowvram: $("opt-lowvram").checked }) });
+    if (prec) $("quant-sel").value = prec.value === "bf16" ? "disabled" : "fp8_e4m3fn";
+    pollSetup();
+  } catch (e) { toast(e.message, true); $("setup-retry").hidden = false; }
+}
+var setupTimer = null;
+async function pollSetup() {
+  clearTimeout(setupTimer);
+  var st;
+  try { st = await api("/api/setup/state?since=" + S.setupCursor); }
+  catch (e) { setupTimer = setTimeout(pollSetup, 2500); return; }
+  S.setupCursor = st.cursor;
+  var log = $("setup-log");
+  if (st.lines && st.lines.length) {
+    var bottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+    log.textContent += st.lines.join("\n") + "\n";
+    if (bottom) log.scrollTop = log.scrollHeight;
+  }
+  var list = $("step-list");
+  list.innerHTML = "";
+  (st.steps || []).forEach(function (s) {
+    var pct = (typeof s.pct === "number") ? Math.round(s.pct) : null;
+    var d = document.createElement("div");
+    d.className = "step " + s.state;
+    d.innerHTML = '<span class="mark">' +
+      (s.state === "done" ? "✓" : s.state === "error" ? "!" : "") +
+      '</span><div class="body"><div class="lbl"><span>' + esc(s.label) +
+      "</span>" + (pct === null ? "" : '<span class="pc">' + pct + "%</span>") +
+      '</div><div class="dt">' + esc(s.detail || "") + "</div>" +
+      (s.state === "running"
+        ? (pct === null ? '<div class="bar4 indet"><i></i></div>'
+                        : '<div class="bar4"><i style="width:' + pct + '%"></i></div>')
+        : "") + "</div>";
+    list.appendChild(d);
+  });
+  if (st.done) { $("setup-done").hidden = false; await refreshStatus(); return; }
+  if (st.error) { $("setup-retry").hidden = false; return; }
+  setupTimer = setTimeout(pollSetup, 1200);
+}
+
+/* ========================= status ========================= */
+async function refreshStatus() {
+  var st;
+  try { st = await api("/api/status"); } catch (e) { return; }
+  S.status = st;
+  var pill = $("enginePill");
+  var stale = !!(st.stale_models && st.comfy_online);
+  pill.classList.toggle("on", !!st.ready && !stale);
+  pill.classList.toggle("off", !st.comfy_online);
+  pill.querySelector("span").textContent =
+    stale ? "Restart the engine"
+    : st.ready ? "Engine ready"
+    : !st.comfy_online ? "Engine offline"
+    : !st.nodes_ready ? "Nodes missing"
+    : (st.missing_models || []).length ? "Weights missing" : "Engine loading";
+  $("modelsTag").hidden = !(st.missing_models && st.missing_models.length);
+  $("engineTag").hidden = !!(st.comfy_online && st.nodes_ready);
+  $("genLabel").textContent = st.ready ? "Generate" : "Set up";
+  if (st.attentions && st.attentions.length) {
+    var a = $("attn-sel"), want = a.dataset.want || a.value || "sdpa";
+    a.innerHTML = "";
+    st.attentions.forEach(function (v) {
+      var o = document.createElement("option");
+      o.value = v; o.textContent = v; a.appendChild(o); });
+    a.value = st.attentions.indexOf(want) >= 0 ? want : "sdpa";
+    delete a.dataset.want;
+  }
+  var c = st.config || {};
+  if ($("veil-settings").hidden) {
+    $("cfg-url").value = c.comfy_url || "";
+    $("cfg-dir").value = c.comfy_dir || "";
+    $("cfg-models").value = c.models_dir || "";
+    $("cfg-auto").checked = !!c.auto_start_comfy;
+  }
+  $("cfg-note").textContent = st.schema_error || "";
+  if (!st.setup_complete && !S.setupSeen) { S.setupSeen = true; openSetup(); }
+}
+
+/* ========================= wiring ========================= */
+function wire() {
+  document.querySelectorAll("[data-view]").forEach(function (b) {
+    b.addEventListener("click", function () { show(b.dataset.view); }); });
+  $("navSettings").addEventListener("click", function () {
+    $("veil-settings").hidden = false; });
+  $("enginePill").addEventListener("click", function () { show("engine"); });
+
+  // the picture: click, or drop a file on the card
+  $("imgCard").addEventListener("click", function () { $("imgFile").click(); });
+  $("imgFile").addEventListener("change", function (e) {
+    var f = (e.target.files || [])[0]; e.target.value = ""; pickImage(f); });
+  $("imgCard").addEventListener("dragover", function (e) {
+    e.preventDefault(); $("imgCard").classList.add("drag"); });
+  $("imgCard").addEventListener("dragleave", function () {
+    $("imgCard").classList.remove("drag"); });
+  $("imgCard").addEventListener("drop", function (e) {
+    e.preventDefault(); $("imgCard").classList.remove("drag");
+    pickImage((e.dataTransfer.files || [])[0]);
+  });
+  $("imgClear").addEventListener("click", function () { setImage(null); });
+
+  // the speech
+  $("btnAudioFile").addEventListener("click", function () { $("audioFile").click(); });
+  $("audioFile").addEventListener("change", function (e) {
+    var f = (e.target.files || [])[0]; e.target.value = "";
+    $("trimStart").value = "0"; $("trimLen").value = "";
+    pickAudio(f);
+  });
+  $("btnRecord").addEventListener("click", toggleRecord);
+  $("audioClear").addEventListener("click", function () { setAudio(null); });
+  ["trimStart", "trimLen"].forEach(function (id) {
+    $(id).addEventListener("input", syncPlan); });
+
+  $("description").addEventListener("input", function (e) {
+    grow(e.target); saveDraft(); });
+  $("segSize").querySelectorAll("button").forEach(function (b) {
+    b.addEventListener("click", function () { setSize(b.dataset.v); syncPlan(); });
+  });
+  ["segVoice", "segTiled", "segT5"].forEach(function (id) {
+    $(id).querySelectorAll("button").forEach(function (b) {
+      b.addEventListener("click", function () { setSeg(id, b.dataset.v); saveDraft(); });
+    });
+  });
+  SLIDERS.forEach(function (row) {
+    $(row[0]).addEventListener("input", function (e) {
+      $(row[1]).textContent = row[2](Number(e.target.value)); syncPlan(); });
+  });
+  ["quant-sel", "attn-sel"].forEach(function (id) {
+    $(id).addEventListener("change", saveDraft); });
+  $("neg-prompt").addEventListener("input", saveDraft);
+  $("btnBatch").addEventListener("click", function () {
+    S.batch = S.batch === 1 ? 2 : S.batch === 2 ? 4 : 1;
+    $("btnBatch").textContent = "×" + S.batch; });
+
+  $("btnSettings").addEventListener("click", function () {
+    var pop = $("settingsPop");
+    var open = !pop.hidden;
+    closePops();
+    if (!open) { syncPlan(); placePop(pop, $("btnSettings")); }
+  });
+  $("btnCloseSettings").addEventListener("click", closePops);
+  document.addEventListener("pointerdown", function (e) {
+    var pop = $("settingsPop");
+    if (pop.hidden || pop.contains(e.target) || $("btnSettings").contains(e.target)) return;
+    pop.hidden = true;
+  });
+  $("btnSeedClear").addEventListener("click", function () { $("seed").value = ""; });
+  $("btnResetOpts").addEventListener("click", function () {
+    SLIDERS.forEach(function (r) { setSlider(r, r[3]); });
+    var prec = (S.status && S.status.config && S.status.config.precision) || "fp8";
+    $("quant-sel").value = prec === "bf16" ? "disabled" : "fp8_e4m3fn";
+    $("attn-sel").value = "sdpa";
+    setSeg("segVoice", "on"); setSeg("segTiled", "on"); setSeg("segT5", "cpu");
+    $("seed").value = "";
+    $("neg-prompt").value = DEFAULT_NEGATIVE;
+    syncPlan(); toast("Back to defaults.");
+  });
+
+  $("btnGenerate").addEventListener("click", generate);
+  $("libSearch").addEventListener("input", function (e) {
+    S.libFilter = e.target.value; renderLib(); });
+
+  $("lbClose").addEventListener("click", closeLightbox);
+  $("lbReuse").addEventListener("click", function () {
+    if (S.lightbox) reuse(S.lightbox); });
+  $("lbDownload").addEventListener("click", function () {
+    if (S.lightbox) window.open("/api/clip/" + S.lightbox.id, "_blank"); });
+  $("lbDelete").addEventListener("click", function () {
+    if (S.lightbox) removeImage(S.lightbox); });
+  $("lbVary").addEventListener("click", function () {
+    if (!S.lightbox) return;
+    reuse(S.lightbox);
+    $("seed").value = "";
+    generate();
+  });
+
+  $("btnRecheck").addEventListener("click", function () { loadDeps(); refreshStatus(); });
+  $("btnRestartEngine").addEventListener("click", restartEngine);
+  $("btnPreflight").addEventListener("click", loadPreflight);
+  $("btnInstallAll").addEventListener("click", installAllMissing);
+  $("btnStartEngine").addEventListener("click", startEngine);
+  $("btnReRun").addEventListener("click", openSetup);
+  $("btnCancelTask").addEventListener("click", function () {
+    if (S.taskId) api("/api/tasks/" + S.taskId + "/cancel", { method: "POST" }); });
+  $("btnSaveTorch").addEventListener("click", async function () {
+    try {
+      await api("/api/config", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ torch_index: $("torch-index").value }) });
+      toast("Saved. Reinstall PyTorch to use it.");
+    } catch (e) { toast(e.message, true); }
+  });
+
+  $("btnBrowse").addEventListener("click", browseRepo);
+  $("hf-repo").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") browseRepo(); });
+  $("btnSaveHf").addEventListener("click", async function () {
+    try {
+      var b = { endpoint: $("hf-endpoint").value.trim(), repo: $("hf-repo").value.trim() };
+      if ($("hf-token").value) b.token = $("hf-token").value;
+      await api("/api/hf/settings", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
+      $("hf-token").value = "";
+      loadHf();
+      toast("Saved.");
+    } catch (e) { toast(e.message, true); }
+  });
+
+  $("btnRunSetup").addEventListener("click", runSetup);
+  $("setup-retry").addEventListener("click", runSetup);
+  $("btnSkipSetup").addEventListener("click", function () { $("veil-setup").hidden = true; });
+  $("setup-hide").addEventListener("click", function () { $("veil-setup").hidden = true; });
+  $("setup-done").addEventListener("click", function () {
+    $("veil-setup").hidden = true; show("create"); });
+  $("btnCloseCfg").addEventListener("click", function () { $("veil-settings").hidden = true; });
+  $("btnStartComfy").addEventListener("click", startEngine);
+  $("btnSaveCfg").addEventListener("click", async function () {
+    try {
+      await api("/api/config", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comfy_url: $("cfg-url").value.trim(),
+          comfy_dir: $("cfg-dir").value.trim(),
+          models_dir: $("cfg-models").value.trim(),
+          auto_start_comfy: $("cfg-auto").checked }) });
+      toast("Saved."); refreshStatus();
+    } catch (e) { toast(e.message, true); }
+  });
+
+  document.addEventListener("keydown", function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !(e.target.closest &&
+        e.target.closest("#veil-settings, #veil-setup"))) {
+      e.preventDefault(); generate();
+    }
+    if (e.key === "Escape") {
+      if (!$("lightbox").hidden) { closeLightbox(); return; }
+      closePops();
+      $("veil-settings").hidden = true;
+      if ($("setup-progress").hidden) $("veil-setup").hidden = true;
+    }
+  });
+}
+
+/* ========================= boot ========================= */
+wire();
+loadDraft();
+syncPlan();
+show("create");
+refreshStatus();
+loadImages();
+pollJobs();
+pollTasks();
+setInterval(refreshStatus, 6000);
+</script>
+</body>
+</html>

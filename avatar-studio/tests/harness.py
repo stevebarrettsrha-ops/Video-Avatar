@@ -1,0 +1,256 @@
+"""Shared plumbing for the suite: reporting, and disposable servers.
+
+Every test gets its own port and its own data directory. Nothing here touches
+the library or config of a real install, and two runs cannot collide.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import textwrap
+import time
+from pathlib import Path
+
+import requests
+
+ROOT = Path(__file__).resolve().parent.parent
+MOCK = Path(__file__).resolve().parent / "mock_comfy.py"
+# The suite talks to servers on this machine; a proxy in the environment would
+# swallow every request.
+os.environ["NO_PROXY"] = os.environ["no_proxy"] = "*"
+
+# The five required weight files, plus the vocal separator.
+WEIGHTS = {
+    "diffusion_models": ["LongCat-Avatar_comfy_bf16.safetensors",
+                         "MelBandRoformer_fp32.safetensors"],
+    "text_encoders": ["umt5-xxl-enc-bf16.safetensors"],
+    "vae": ["Wan2_1_VAE_bf16.safetensors"],
+    "loras": ["LongCat_distill_lora_alpha64_bf16.safetensors"],
+    "wav2vec2": ["wav2vec2-chinese-base_fp16.safetensors"],
+}
+
+
+# --------------------------------------------------------------------------- #
+# reporting
+# --------------------------------------------------------------------------- #
+CURRENT: "Suite | None" = None
+
+
+class Suite:
+    """Collects checks so one failure does not hide the rest."""
+
+    def __init__(self, name: str) -> None:
+        global CURRENT
+        self.name = name
+        self.passed = 0
+        self.failures: list[str] = []
+        CURRENT = self
+
+    def check(self, what: str, ok: bool, detail: str = "") -> bool:
+        if ok:
+            self.passed += 1
+            print(f"  ok   {what}" + (f" — {detail}" if detail else ""))
+        else:
+            self.failures.append(what)
+            print(f"  FAIL {what}" + (f" — {detail}" if detail else ""))
+        return bool(ok)
+
+    def equal(self, what: str, got, want) -> bool:
+        return self.check(what, got == want, f"got {got!r}, wanted {want!r}")
+
+    def fails_with(self, what: str, fn, expect: type = Exception,
+                   contains: str = "") -> bool:
+        """The call must raise, and say something useful when it does."""
+        try:
+            fn()
+        except expect as exc:
+            return self.check(what, contains.lower() in str(exc).lower(),
+                              f"said {str(exc)[:70]!r}")
+        except Exception as exc:  # noqa: BLE001
+            return self.check(what, False, f"raised {type(exc).__name__}: {exc}")
+        return self.check(what, False, "did not raise at all")
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+# --------------------------------------------------------------------------- #
+# disposable servers
+# --------------------------------------------------------------------------- #
+class Server:
+    """A subprocess that is always cleaned up, however the test ends."""
+
+    def __init__(self, argv: list[str], port: int, ready_path: str,
+                 env: dict | None = None, cwd: Path = ROOT) -> None:
+        self.argv, self.port, self.ready_path = argv, port, ready_path
+        self.env, self.cwd = env or {}, cwd
+        self.proc: subprocess.Popen | None = None
+        self.url = f"http://127.0.0.1:{port}"
+        self.log = Path(tempfile.mkstemp(suffix=".log")[1])
+
+    def __enter__(self) -> "Server":
+        self.proc = subprocess.Popen(
+            self.argv, cwd=str(self.cwd), env={**os.environ, **self.env},
+            stdout=self.log.open("w"), stderr=subprocess.STDOUT,
+            start_new_session=True)
+        for _ in range(120):
+            if self.proc.poll() is not None:
+                raise RuntimeError(f"{self.argv[-1]} died at startup:\n"
+                                   f"{self.log.read_text()[-2000:]}")
+            try:
+                requests.get(self.url + self.ready_path, timeout=2)
+                return self
+            except Exception:
+                time.sleep(0.25)
+        raise RuntimeError(f"{self.argv[-1]} never answered on {self.port}:\n"
+                           f"{self.log.read_text()[-2000:]}")
+
+    def __exit__(self, *exc) -> None:
+        self.stop()
+
+    def stop(self) -> None:
+        if self.proc and self.proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(self.proc.pid), signal.SIGTERM)
+                self.proc.wait(timeout=10)
+            except Exception:
+                try:
+                    self.proc.kill()
+                except Exception:
+                    pass
+
+    def tail(self, lines: int = 25) -> str:
+        return "\n".join(self.log.read_text().splitlines()[-lines:])
+
+
+def comfy(delay: float = 1.0, **env) -> Server:
+    """A stand-in ComfyUI. delay is how long a clip takes to 'render'."""
+    port = free_port()
+    return Server([sys.executable, str(MOCK), str(port)], port, "/system_stats",
+                  env={"MOCK_DELAY": str(delay), **env})
+
+
+def fake_install(root: Path, stale_first_boot: bool = False) -> Path:
+    """A pretend ComfyUI checkout whose main.py serves the mock engine.
+
+    This is what lets the app truly own, stop and restart an engine process
+    in tests. With stale_first_boot, the FIRST launch serves empty model
+    lists — an engine that started before the weights landed — and any later
+    launch serves the full set, exactly like the real startup-scan behaviour.
+    """
+    install = root / "ComfyUI"
+    install.mkdir(parents=True, exist_ok=True)
+    (install / "main.py").write_text(textwrap.dedent(f"""\
+        import argparse, os, pathlib, runpy, sys
+        here = pathlib.Path(__file__).parent
+        p = argparse.ArgumentParser()
+        p.add_argument("--listen"); p.add_argument("--port")
+        p.add_argument("--disable-auto-launch", action="store_true")
+        p.add_argument("--lowvram", action="store_true")
+        p.add_argument("--cache-none", action="store_true")
+        p.add_argument("--preview-method")
+        a = p.parse_args()
+        flag = here / "stale.flag"
+        if flag.exists():
+            os.environ["MOCK_BLANK_UNETS"] = "999999"
+            flag.unlink()
+            print("model scan found no diffusion models", flush=True)
+        else:
+            print("model scan found the LongCat Avatar set", flush=True)
+        print("Starting server", flush=True)
+        sys.argv = ["mock_comfy.py", a.port]
+        runpy.run_path({str(MOCK)!r}, run_name="__main__")
+    """))
+    if stale_first_boot:
+        (install / "stale.flag").write_text("first boot is a stale scan")
+    fake_weights(install / "models")
+    return install
+
+
+def supervised_comfy(delay: float = 1.0) -> Server:
+    """A mock engine under a supervisor that respawns it when killed —
+    ComfyUI Desktop and launcher scripts behave exactly like this."""
+    port = free_port()
+    script = Path(tempfile.mkstemp(suffix="_supervisor.py")[1])
+    script.write_text(textwrap.dedent(f"""\
+        import subprocess, sys, time
+        while True:
+            p = subprocess.Popen([sys.executable, {str(MOCK)!r}, sys.argv[1]])
+            p.wait()
+            time.sleep(0.3)
+    """))
+    return Server([sys.executable, str(script), str(port)], port,
+                  "/system_stats", env={"MOCK_DELAY": str(delay)})
+
+
+def hub() -> Server:
+    """A stand-in huggingface.co, for the download paths."""
+    port = free_port()
+    return Server([sys.executable, str(Path(__file__).resolve().parent
+                                       / "mock_hf.py"), str(port)],
+                  port, "/mock/log")
+
+
+def fake_weights(models_dir: Path) -> None:
+    """Drop the weight files where missing_models() looks for them."""
+    for folder, names in WEIGHTS.items():
+        for name in names:
+            path = models_dir / folder / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"\x00" * 16)
+
+
+def studio(comfy_url: str, data: Path, models_dir: Path | None = None,
+           **config) -> Server:
+    """Avatar Studio itself, with its own data folder and config to match."""
+    data.mkdir(parents=True, exist_ok=True)
+    (data / "config.json").write_text(json.dumps({
+        "comfy_url": comfy_url, "comfy_dir": "", "python": "",
+        "models_dir": str(models_dir or ""), "managed": False,
+        "auto_start_comfy": False, "torch_index": "",
+        "precision": "fp8",
+        "setup_complete": True, **config}))
+    port = free_port()
+    return Server([sys.executable, "server.py"], port, "/api/status",
+                  env={"AVATAR_STUDIO_PORT": str(port),
+                       "AVATAR_STUDIO_NO_BROWSER": "1",
+                       "AVATAR_STUDIO_DATA": str(data)})
+
+
+class Workspace:
+    """A throwaway data directory, removed when the test finishes."""
+
+    def __enter__(self) -> Path:
+        self.path = Path(tempfile.mkdtemp(prefix="avatar-test-"))
+        return self.path
+
+    def __exit__(self, *exc) -> None:
+        shutil.rmtree(self.path, ignore_errors=True)
+
+
+def wait_for(condition, timeout: float = 30, step: float = 0.5) -> bool:
+    """Poll until it is true, rather than sleeping and hoping."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if condition():
+            return True
+        time.sleep(step)
+    return False
+
+
+def finish_jobs(app_url: str, timeout: float = 60) -> list[dict]:
+    """Wait for every running clip to stop running, then report them all."""
+    wait_for(lambda: not [j for j in requests.get(f"{app_url}/api/jobs",
+                                                  timeout=10).json()
+                          if j["status"] == "running"], timeout)
+    return requests.get(f"{app_url}/api/jobs", timeout=10).json()

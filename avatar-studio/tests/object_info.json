@@ -1,0 +1,2641 @@
+{
+ "WanVideoModelLoader": {
+  "input": {
+   "required": {
+    "model": [
+     [
+      "LongCat-Avatar_comfy_bf16.safetensors",
+      "MelBandRoformer_fp32.safetensors"
+     ],
+     {
+      "tooltip": "These models are loaded from the 'ComfyUI/models/diffusion_models' -folder"
+     }
+    ],
+    "base_precision": [
+     [
+      "fp32",
+      "bf16",
+      "fp16",
+      "fp16_fast"
+     ],
+     {
+      "default": "bf16"
+     }
+    ],
+    "quantization": [
+     [
+      "disabled",
+      "fp8_e4m3fn",
+      "fp8_e4m3fn_fast",
+      "fp8_e4m3fn_scaled",
+      "fp8_e4m3fn_scaled_fast",
+      "fp8_e5m2",
+      "fp8_e5m2_fast",
+      "fp8_e5m2_scaled",
+      "fp8_e5m2_scaled_fast"
+     ],
+     {
+      "default": "disabled",
+      "tooltip": "Optional quantization method, 'disabled' acts as autoselect based by weights. Scaled modes only work with matching weights, _fast modes (fp8 matmul) require CUDA compute capability >= 8.9 (NVIDIA 4000 series and up), e4m3fn generally can not be torch.compiled on compute capability < 8.9 (3000 series and under)"
+     }
+    ],
+    "load_device": [
+     [
+      "main_device",
+      "offload_device"
+     ],
+     {
+      "default": "offload_device",
+      "tooltip": "Initial device to load the model to, NOT recommended with the larger models unless you have 48GB+ VRAM"
+     }
+    ]
+   },
+   "optional": {
+    "attention_mode": [
+     [
+      "sdpa",
+      "flash_attn_2",
+      "flash_attn_3",
+      "sageattn",
+      "sageattn_3",
+      "radial_sage_attention",
+      "sageattn_compiled",
+      "sageattn_ultravico",
+      "comfy"
+     ],
+     {
+      "default": "sdpa"
+     }
+    ],
+    "compile_args": [
+     "WANCOMPILEARGS"
+    ],
+    "block_swap_args": [
+     "BLOCKSWAPARGS"
+    ],
+    "lora": [
+     "WANVIDLORA",
+     {
+      "default": null
+     }
+    ],
+    "vram_management_args": [
+     "VRAM_MANAGEMENTARGS",
+     {
+      "default": null,
+      "tooltip": "Alternative offloading method from DiffSynth-Studio, more aggressive in reducing memory use than block swapping, but can be slower"
+     }
+    ],
+    "extra_model": [
+     "VACEPATH",
+     {
+      "default": null,
+      "tooltip": "Extra model to add to the main model, ie. VACE or MTV Crafter"
+     }
+    ],
+    "fantasytalking_model": [
+     "FANTASYTALKINGMODEL",
+     {
+      "default": null,
+      "tooltip": "FantasyTalking model https://github.com/Fantasy-AMAP"
+     }
+    ],
+    "multitalk_model": [
+     "MULTITALKMODEL",
+     {
+      "default": null,
+      "tooltip": "Multitalk model"
+     }
+    ],
+    "fantasyportrait_model": [
+     "FANTASYPORTRAITMODEL",
+     {
+      "default": null,
+      "tooltip": "FantasyPortrait model"
+     }
+    ],
+    "rms_norm_function": [
+     [
+      "default",
+      "pytorch"
+     ],
+     {
+      "default": "default",
+      "tooltip": "RMSNorm function to use, 'pytorch' is the new native torch RMSNorm, which is faster (when not using torch.compile mostly) but changes results slightly. 'default' is the original WanRMSNorm"
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "model",
+    "base_precision",
+    "quantization",
+    "load_device"
+   ],
+   "optional": [
+    "attention_mode",
+    "compile_args",
+    "block_swap_args",
+    "lora",
+    "vram_management_args",
+    "extra_model",
+    "fantasytalking_model",
+    "multitalk_model",
+    "fantasyportrait_model",
+    "rms_norm_function"
+   ]
+  },
+  "output": [
+   "WANVIDEOMODEL"
+  ],
+  "output_name": [
+   "model"
+  ],
+  "name": "WanVideoModelLoader",
+  "display_name": "WanVideo Model Loader",
+  "category": "WanVideoWrapper",
+  "output_node": false,
+  "python_module": "custom_nodes.ComfyUI-WanVideoWrapper"
+ },
+ "WanVideoVAELoader": {
+  "input": {
+   "required": {
+    "model_name": [
+     [
+      "Wan2_1_VAE_bf16.safetensors"
+     ],
+     {
+      "tooltip": "These models are loaded from 'ComfyUI/models/vae'"
+     }
+    ]
+   },
+   "optional": {
+    "precision": [
+     [
+      "fp16",
+      "fp32",
+      "bf16"
+     ],
+     {
+      "default": "bf16"
+     }
+    ],
+    "compile_args": [
+     "WANCOMPILEARGS"
+    ],
+    "use_cpu_cache": [
+     "BOOLEAN",
+     {
+      "default": false,
+      "tooltip": "Reduces VRAM usage, but slows the VAE down a lot"
+     }
+    ],
+    "verbose": [
+     "BOOLEAN",
+     {
+      "default": false,
+      "tooltip": "Enables memory usage logging when using the model"
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "model_name"
+   ],
+   "optional": [
+    "precision",
+    "compile_args",
+    "use_cpu_cache",
+    "verbose"
+   ]
+  },
+  "output": [
+   "WANVAE"
+  ],
+  "output_name": [
+   "vae"
+  ],
+  "name": "WanVideoVAELoader",
+  "display_name": "WanVideo VAE Loader",
+  "category": "WanVideoWrapper",
+  "output_node": false,
+  "python_module": "custom_nodes.ComfyUI-WanVideoWrapper"
+ },
+ "WanVideoTextEncodeCached": {
+  "input": {
+   "required": {
+    "model_name": [
+     [
+      "umt5-xxl-enc-bf16.safetensors"
+     ],
+     {
+      "tooltip": "These models are loaded from 'ComfyUI/models/text_encoders'"
+     }
+    ],
+    "precision": [
+     [
+      "fp32",
+      "bf16"
+     ],
+     {
+      "default": "bf16"
+     }
+    ],
+    "positive_prompt": [
+     "STRING",
+     {
+      "default": "",
+      "multiline": true
+     }
+    ],
+    "negative_prompt": [
+     "STRING",
+     {
+      "default": "",
+      "multiline": true
+     }
+    ],
+    "quantization": [
+     [
+      "disabled",
+      "fp8_e4m3fn"
+     ],
+     {
+      "default": "disabled",
+      "tooltip": "optional quantization method"
+     }
+    ],
+    "use_disk_cache": [
+     "BOOLEAN",
+     {
+      "default": true,
+      "tooltip": "Cache the text embeddings to disk for faster re-use, under the custom_nodes/ComfyUI-WanVideoWrapper/text_embed_cache directory"
+     }
+    ],
+    "device": [
+     [
+      "gpu",
+      "cpu"
+     ],
+     {
+      "default": "gpu",
+      "tooltip": "Device to run the text encoding on."
+     }
+    ]
+   },
+   "optional": {
+    "extender_args": [
+     "WANVIDEOPROMPTEXTENDER_ARGS",
+     {
+      "tooltip": "Use this node to extend the prompt with additional text."
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "model_name",
+    "precision",
+    "positive_prompt",
+    "negative_prompt",
+    "quantization",
+    "use_disk_cache",
+    "device"
+   ],
+   "optional": [
+    "extender_args"
+   ]
+  },
+  "output": [
+   "WANVIDEOTEXTEMBEDS",
+   "WANVIDEOTEXTEMBEDS",
+   "STRING"
+  ],
+  "output_name": [
+   "text_embeds",
+   "negative_text_embeds",
+   "positive_prompt"
+  ],
+  "name": "WanVideoTextEncodeCached",
+  "display_name": "WanVideo TextEncode Cached",
+  "category": "WanVideoWrapper",
+  "output_node": false,
+  "python_module": "custom_nodes.ComfyUI-WanVideoWrapper"
+ },
+ "WanVideoEncode": {
+  "input": {
+   "required": {
+    "vae": [
+     "WANVAE"
+    ],
+    "image": [
+     "IMAGE"
+    ],
+    "enable_vae_tiling": [
+     "BOOLEAN",
+     {
+      "default": false,
+      "tooltip": "Drastically reduces memory use but may introduce seams"
+     }
+    ],
+    "tile_x": [
+     "INT",
+     {
+      "default": 272,
+      "min": 64,
+      "max": 2048,
+      "step": 1,
+      "tooltip": "Tile size in pixels, smaller values use less VRAM, may introduce more seams"
+     }
+    ],
+    "tile_y": [
+     "INT",
+     {
+      "default": 272,
+      "min": 64,
+      "max": 2048,
+      "step": 1,
+      "tooltip": "Tile size in pixels, smaller values use less VRAM, may introduce more seams"
+     }
+    ],
+    "tile_stride_x": [
+     "INT",
+     {
+      "default": 144,
+      "min": 32,
+      "max": 2048,
+      "step": 32,
+      "tooltip": "Tile stride in pixels, smaller values use less VRAM, may introduce more seams"
+     }
+    ],
+    "tile_stride_y": [
+     "INT",
+     {
+      "default": 128,
+      "min": 32,
+      "max": 2048,
+      "step": 32,
+      "tooltip": "Tile stride in pixels, smaller values use less VRAM, may introduce more seams"
+     }
+    ]
+   },
+   "optional": {
+    "noise_aug_strength": [
+     "FLOAT",
+     {
+      "default": 0.0,
+      "min": 0.0,
+      "max": 10.0,
+      "step": 0.001,
+      "tooltip": "Strength of noise augmentation, helpful for leapfusion I2V where some noise can add motion and give sharper results"
+     }
+    ],
+    "latent_strength": [
+     "FLOAT",
+     {
+      "default": 1.0,
+      "min": 0.0,
+      "max": 10.0,
+      "step": 0.001,
+      "tooltip": "Additional latent multiplier, helpful for leapfusion I2V where lower values allow for more motion"
+     }
+    ],
+    "mask": [
+     "MASK"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "vae",
+    "image",
+    "enable_vae_tiling",
+    "tile_x",
+    "tile_y",
+    "tile_stride_x",
+    "tile_stride_y"
+   ],
+   "optional": [
+    "noise_aug_strength",
+    "latent_strength",
+    "mask"
+   ]
+  },
+  "output": [
+   "LATENT"
+  ],
+  "output_name": [
+   "samples"
+  ],
+  "name": "WanVideoEncode",
+  "display_name": "WanVideo Encode",
+  "category": "WanVideoWrapper",
+  "output_node": false,
+  "python_module": "custom_nodes.ComfyUI-WanVideoWrapper"
+ },
+ "WanVideoDecode": {
+  "input": {
+   "required": {
+    "vae": [
+     "WANVAE"
+    ],
+    "samples": [
+     "LATENT"
+    ],
+    "enable_vae_tiling": [
+     "BOOLEAN",
+     {
+      "default": false,
+      "tooltip": "Drastically reduces memory use but will introduce seams at tile stride boundaries. The location and number of seams is dictated by the tile stride size. The visibility of seams can be controlled by increasing the tile size. Seams become less obvious at 1.5x stride and are barely noticeable at 2x stride size. Which is to say if you use a stride width of 160, the seams are barely noticeable with a tile width of 320."
+     }
+    ],
+    "tile_x": [
+     "INT",
+     {
+      "default": 272,
+      "min": 40,
+      "max": 2048,
+      "step": 8,
+      "tooltip": "Tile width in pixels. Smaller values use less VRAM but will make seams more obvious."
+     }
+    ],
+    "tile_y": [
+     "INT",
+     {
+      "default": 272,
+      "min": 40,
+      "max": 2048,
+      "step": 8,
+      "tooltip": "Tile height in pixels. Smaller values use less VRAM but will make seams more obvious."
+     }
+    ],
+    "tile_stride_x": [
+     "INT",
+     {
+      "default": 144,
+      "min": 32,
+      "max": 2040,
+      "step": 8,
+      "tooltip": "Tile stride width in pixels. Smaller values use less VRAM but will introduce more seams."
+     }
+    ],
+    "tile_stride_y": [
+     "INT",
+     {
+      "default": 128,
+      "min": 32,
+      "max": 2040,
+      "step": 8,
+      "tooltip": "Tile stride height in pixels. Smaller values use less VRAM but will introduce more seams."
+     }
+    ]
+   },
+   "optional": {
+    "normalization": [
+     [
+      "default",
+      "minmax",
+      "none"
+     ],
+     {
+      "advanced": true
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "vae",
+    "samples",
+    "enable_vae_tiling",
+    "tile_x",
+    "tile_y",
+    "tile_stride_x",
+    "tile_stride_y"
+   ],
+   "optional": [
+    "normalization"
+   ]
+  },
+  "output": [
+   "IMAGE"
+  ],
+  "output_name": [
+   "images"
+  ],
+  "name": "WanVideoDecode",
+  "display_name": "WanVideo Decode",
+  "category": "WanVideoWrapper",
+  "output_node": false,
+  "python_module": "custom_nodes.ComfyUI-WanVideoWrapper"
+ },
+ "WanVideoSamplerv2": {
+  "input": {
+   "required": {
+    "model": [
+     "WANVIDEOMODEL"
+    ],
+    "image_embeds": [
+     "WANVIDIMAGE_EMBEDS"
+    ],
+    "cfg": [
+     "FLOAT",
+     {
+      "default": 6.0,
+      "min": 0.0,
+      "max": 30.0,
+      "step": 0.01
+     }
+    ],
+    "seed": [
+     "INT",
+     {
+      "default": 0,
+      "min": 0,
+      "max": 18446744073709551615
+     }
+    ],
+    "force_offload": [
+     "BOOLEAN",
+     {
+      "default": true,
+      "tooltip": "Moves the model to the offload device after sampling"
+     }
+    ],
+    "scheduler": [
+     "WANVIDEOSCHEDULER"
+    ]
+   },
+   "optional": {
+    "text_embeds": [
+     "WANVIDEOTEXTEMBEDS"
+    ],
+    "samples": [
+     "LATENT",
+     {
+      "tooltip": "init Latents to use for video2video process"
+     }
+    ],
+    "add_noise_to_samples": [
+     "BOOLEAN",
+     {
+      "default": false,
+      "tooltip": "Add noise to the samples before sampling, needed for video2video sampling when starting from clean video"
+     }
+    ],
+    "extra_args": [
+     "WANVIDSAMPLEREXTRAARGS"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "model",
+    "image_embeds",
+    "cfg",
+    "seed",
+    "force_offload",
+    "scheduler"
+   ],
+   "optional": [
+    "text_embeds",
+    "samples",
+    "add_noise_to_samples",
+    "extra_args"
+   ]
+  },
+  "output": [
+   "LATENT",
+   "LATENT"
+  ],
+  "output_name": [
+   "samples",
+   "denoised_samples"
+  ],
+  "name": "WanVideoSamplerv2",
+  "display_name": "WanVideo Sampler v2",
+  "category": "WanVideoWrapper",
+  "output_node": false,
+  "python_module": "custom_nodes.ComfyUI-WanVideoWrapper"
+ },
+ "WanVideoSchedulerv2": {
+  "input": {
+   "required": {
+    "scheduler": [
+     [
+      "unipc",
+      "unipc/beta",
+      "dpm++",
+      "dpm++/beta",
+      "dpm++_sde",
+      "dpm++_sde/beta",
+      "euler",
+      "euler/beta",
+      "longcat_distill_euler",
+      "deis",
+      "lcm",
+      "lcm/beta",
+      "res_multistep",
+      "er_sde",
+      "flowmatch_causvid",
+      "flowmatch_distill",
+      "flowmatch_pusa",
+      "multitalk",
+      "sa_ode_stable",
+      "rcm",
+      "vibt_unipc"
+     ],
+     {
+      "default": "unipc"
+     }
+    ],
+    "steps": [
+     "INT",
+     {
+      "default": 30,
+      "min": 1,
+      "tooltip": "Number of steps for the scheduler"
+     }
+    ],
+    "shift": [
+     "FLOAT",
+     {
+      "default": 5.0,
+      "min": 0.0,
+      "max": 1000.0,
+      "step": 0.01
+     }
+    ],
+    "start_step": [
+     "INT",
+     {
+      "default": 0,
+      "min": 0,
+      "tooltip": "Starting step for the scheduler"
+     }
+    ],
+    "end_step": [
+     "INT",
+     {
+      "default": -1,
+      "min": -1,
+      "tooltip": "Ending step for the scheduler"
+     }
+    ]
+   },
+   "optional": {
+    "sigmas": [
+     "SIGMAS"
+    ],
+    "enhance_hf": [
+     "BOOLEAN",
+     {
+      "default": false,
+      "tooltip": "Enhanced high-frequency denoising schedule"
+     }
+    ]
+   },
+   "hidden": {
+    "unique_id": "UNIQUE_ID"
+   }
+  },
+  "input_order": {
+   "required": [
+    "scheduler",
+    "steps",
+    "shift",
+    "start_step",
+    "end_step"
+   ],
+   "optional": [
+    "sigmas",
+    "enhance_hf"
+   ],
+   "hidden": [
+    "unique_id"
+   ]
+  },
+  "output": [
+   "WANVIDEOSCHEDULER"
+  ],
+  "output_name": [
+   "scheduler"
+  ],
+  "name": "WanVideoSchedulerv2",
+  "display_name": "WanVideo Scheduler v2",
+  "category": "WanVideoWrapper",
+  "output_node": false,
+  "python_module": "custom_nodes.ComfyUI-WanVideoWrapper"
+ },
+ "WanVideoLongCatAvatarExtendEmbeds": {
+  "input": {
+   "required": {
+    "prev_latents": [
+     "LATENT",
+     {
+      "tooltip": "Full previous latents to be used to continue generation, continuation frames are selected based on 'overlap' parameter"
+     }
+    ],
+    "audio_embeds": [
+     "MULTITALK_EMBEDS",
+     {
+      "tooltip": "Full length audio embeddings"
+     }
+    ],
+    "num_frames": [
+     "INT",
+     {
+      "tooltip": "Number of new frames to generate",
+      "default": 93,
+      "min": 1,
+      "max": 256,
+      "step": 1
+     }
+    ],
+    "overlap": [
+     "INT",
+     {
+      "tooltip": "Number of overlapping frames from previous latents for video continuation, set to 0 for T2V",
+      "default": 13,
+      "min": 0,
+      "max": 16,
+      "step": 1
+     }
+    ],
+    "frames_processed": [
+     "INT",
+     {
+      "tooltip": "Number of frames already processed in the video, used to select audio features",
+      "default": 0,
+      "min": 0,
+      "max": 10000,
+      "step": 1
+     }
+    ],
+    "if_not_enough_audio": [
+     "COMBO",
+     {
+      "tooltip": "What to do if there are not enough frames in pose_images for the window",
+      "default": "pad_with_start",
+      "multiselect": false,
+      "options": [
+       "pad_with_start",
+       "mirror_from_end"
+      ]
+     }
+    ],
+    "ref_frame_index": [
+     "INT",
+     {
+      "tooltip": "Values between 0 - 24 ensures better consistency, while selecting other ranges (e.g., -10 or 30) helps reduce repeated actions",
+      "default": 10,
+      "min": 0,
+      "max": 1000,
+      "step": 1
+     }
+    ],
+    "ref_mask_frame_range": [
+     "INT",
+     {
+      "tooltip": "Larger range can further help mitigate repeated actions, but excessively large values may introduce artifacts",
+      "default": 3,
+      "min": 0,
+      "max": 20,
+      "step": 1
+     }
+    ]
+   },
+   "optional": {
+    "ref_latent": [
+     "LATENT",
+     {
+      "tooltip": "Reference latent used for consistency, generally should be either the init image, or first latent from first generation"
+     }
+    ],
+    "samples": [
+     "LATENT",
+     {
+      "tooltip": "For the sampler 'samples' input, used for slicing samples per window for vid2vid"
+     }
+    ],
+    "prev_images": [
+     "IMAGE",
+     {
+      "tooltip": "LongCat-Avatar-1.5: decoded frames from the previous segment. When provided together with `vae`, the trailing `overlap` frames are re-encoded through the VAE and used as the overlap conditioning (matches v1.5's use_vcond=False behavior). Leave disconnected for v1.0."
+     }
+    ],
+    "vae": [
+     "WANVAE",
+     {
+      "tooltip": "LongCat-Avatar-1.5: VAE used to re-encode `prev_images` for the overlap region. Only used when `prev_images` is also provided."
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "prev_latents",
+    "audio_embeds",
+    "num_frames",
+    "overlap",
+    "frames_processed",
+    "if_not_enough_audio",
+    "ref_frame_index",
+    "ref_mask_frame_range"
+   ],
+   "optional": [
+    "ref_latent",
+    "samples",
+    "prev_images",
+    "vae"
+   ]
+  },
+  "output": [
+   "WANVIDIMAGE_EMBEDS",
+   "LATENT"
+  ],
+  "output_name": [
+   "image_embeds",
+   "samples_slice"
+  ],
+  "name": "WanVideoLongCatAvatarExtendEmbeds",
+  "display_name": null,
+  "category": "WanVideoWrapper",
+  "output_node": false,
+  "python_module": "custom_nodes.ComfyUI-WanVideoWrapper"
+ },
+ "MultiTalkWav2VecEmbeds": {
+  "input": {
+   "required": {
+    "wav2vec_model": [
+     "WAV2VECMODEL"
+    ],
+    "audio_1": [
+     "AUDIO"
+    ],
+    "normalize_loudness": [
+     "BOOLEAN",
+     {
+      "default": true,
+      "tooltip": "Normalize the audio loudness to -23 LUFS"
+     }
+    ],
+    "num_frames": [
+     "INT",
+     {
+      "default": 81,
+      "min": 1,
+      "max": 10000,
+      "step": 1,
+      "tooltip": "The total frame count to generate."
+     }
+    ],
+    "fps": [
+     "FLOAT",
+     {
+      "default": 25.0,
+      "min": 1.0,
+      "max": 60.0,
+      "step": 0.1
+     }
+    ],
+    "audio_scale": [
+     "FLOAT",
+     {
+      "default": 1.0,
+      "min": 0.0,
+      "max": 100.0,
+      "step": 0.01,
+      "tooltip": "Strength of the audio conditioning"
+     }
+    ],
+    "audio_cfg_scale": [
+     "FLOAT",
+     {
+      "default": 1.0,
+      "min": 0.0,
+      "max": 100.0,
+      "step": 0.01,
+      "tooltip": "When not 1.0, an extra model pass without audio conditioning is done: slower inference but more motion is allowed"
+     }
+    ],
+    "multi_audio_type": [
+     [
+      "para",
+      "add"
+     ],
+     {
+      "default": "para",
+      "tooltip": "'para' overlay speakers in parallel, 'add' concatenate sequentially"
+     }
+    ]
+   },
+   "optional": {
+    "audio_2": [
+     "AUDIO"
+    ],
+    "audio_3": [
+     "AUDIO"
+    ],
+    "audio_4": [
+     "AUDIO"
+    ],
+    "ref_target_masks": [
+     "MASK",
+     {
+      "tooltip": "Per-speaker semantic mask(s) in pixel space. Supply one mask per speaker (plus optional background) to guide mouth assignment"
+     }
+    ],
+    "add_noise_floor": [
+     "BOOLEAN",
+     {
+      "default": false,
+      "tooltip": "Add a low-level noise floor to the audio to reduce silent gaps"
+     }
+    ],
+    "smooth_transients": [
+     "BOOLEAN",
+     {
+      "default": false,
+      "tooltip": "Apply a low-pass filter to the audio to smooth out transients"
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "wav2vec_model",
+    "audio_1",
+    "normalize_loudness",
+    "num_frames",
+    "fps",
+    "audio_scale",
+    "audio_cfg_scale",
+    "multi_audio_type"
+   ],
+   "optional": [
+    "audio_2",
+    "audio_3",
+    "audio_4",
+    "ref_target_masks",
+    "add_noise_floor",
+    "smooth_transients"
+   ]
+  },
+  "output": [
+   "MULTITALK_EMBEDS",
+   "AUDIO",
+   "INT"
+  ],
+  "output_name": [
+   "multitalk_embeds",
+   "audio",
+   "num_frames"
+  ],
+  "name": "MultiTalkWav2VecEmbeds",
+  "display_name": "Multi/InfiniteTalk Wav2vec2 Embeds",
+  "category": "WanVideoWrapper",
+  "output_node": false,
+  "python_module": "custom_nodes.ComfyUI-WanVideoWrapper"
+ },
+ "Wav2VecModelLoader": {
+  "input": {
+   "required": {
+    "model": [
+     [
+      "wav2vec2-chinese-base_fp16.safetensors"
+     ],
+     {
+      "tooltip": "These models are loaded from the 'ComfyUI/models/wav2vec2' -folder"
+     }
+    ],
+    "base_precision": [
+     [
+      "fp32",
+      "bf16",
+      "fp16"
+     ],
+     {
+      "default": "fp16"
+     }
+    ],
+    "load_device": [
+     [
+      "main_device",
+      "offload_device"
+     ],
+     {
+      "default": "main_device",
+      "tooltip": "Initial device to load the model to, NOT recommended with the larger models unless you have 48GB+ VRAM"
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "model",
+    "base_precision",
+    "load_device"
+   ]
+  },
+  "output": [
+   "WAV2VECMODEL"
+  ],
+  "output_name": [
+   "wav2vec_model"
+  ],
+  "name": "Wav2VecModelLoader",
+  "display_name": "Wav2vec2 Model Loader",
+  "category": "WanVideoWrapper",
+  "output_node": false,
+  "python_module": "custom_nodes.ComfyUI-WanVideoWrapper"
+ },
+ "DownloadAndLoadWav2VecModel": {
+  "input": {
+   "required": {
+    "model": [
+     [
+      "TencentGameMate/chinese-wav2vec2-base",
+      "facebook/wav2vec2-base-960h"
+     ]
+    ],
+    "base_precision": [
+     [
+      "fp32",
+      "bf16",
+      "fp16"
+     ],
+     {
+      "default": "fp16"
+     }
+    ],
+    "load_device": [
+     [
+      "main_device",
+      "offload_device"
+     ],
+     {
+      "default": "main_device",
+      "tooltip": "Initial device to load the model to, NOT recommended with the larger models unless you have 48GB+ VRAM"
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "model",
+    "base_precision",
+    "load_device"
+   ]
+  },
+  "output": [
+   "WAV2VECMODEL"
+  ],
+  "output_name": [
+   "wav2vec_model"
+  ],
+  "name": "DownloadAndLoadWav2VecModel",
+  "display_name": "(Down)load Wav2Vec Model",
+  "category": "WanVideoWrapper",
+  "output_node": false,
+  "python_module": "custom_nodes.ComfyUI-WanVideoWrapper"
+ },
+ "WanVideoBlockSwap": {
+  "input": {
+   "required": {
+    "blocks_to_swap": [
+     "INT",
+     {
+      "default": 20,
+      "min": 0,
+      "max": 48,
+      "step": 1,
+      "tooltip": "Number of transformer blocks to swap, the 14B model has 40, while the 1.3B and 5B models have 30 blocks. LongCat-video has 48"
+     }
+    ],
+    "offload_img_emb": [
+     "BOOLEAN",
+     {
+      "default": false,
+      "tooltip": "Offload img_emb to offload_device"
+     }
+    ],
+    "offload_txt_emb": [
+     "BOOLEAN",
+     {
+      "default": false,
+      "tooltip": "Offload time_emb to offload_device"
+     }
+    ]
+   },
+   "optional": {
+    "use_non_blocking": [
+     "BOOLEAN",
+     {
+      "default": false,
+      "tooltip": "Use non-blocking memory transfer for offloading, reserves more RAM but is faster"
+     }
+    ],
+    "vace_blocks_to_swap": [
+     "INT",
+     {
+      "default": 0,
+      "min": 0,
+      "max": 15,
+      "step": 1,
+      "tooltip": "Number of VACE blocks to swap, the VACE model has 15 blocks"
+     }
+    ],
+    "prefetch_blocks": [
+     "INT",
+     {
+      "default": 0,
+      "min": 0,
+      "max": 40,
+      "step": 1,
+      "tooltip": "Number of blocks to prefetch ahead, can speed up processing but increases memory usage. 1 is usually enough to offset speed loss from block swapping, use the debug option to confirm it for your system"
+     }
+    ],
+    "block_swap_debug": [
+     "BOOLEAN",
+     {
+      "default": false,
+      "tooltip": "Enable debug logging for block swapping"
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "blocks_to_swap",
+    "offload_img_emb",
+    "offload_txt_emb"
+   ],
+   "optional": [
+    "use_non_blocking",
+    "vace_blocks_to_swap",
+    "prefetch_blocks",
+    "block_swap_debug"
+   ]
+  },
+  "output": [
+   "BLOCKSWAPARGS"
+  ],
+  "output_name": [
+   "block_swap_args"
+  ],
+  "name": "WanVideoBlockSwap",
+  "display_name": "WanVideo Block Swap",
+  "category": "WanVideoWrapper",
+  "output_node": false,
+  "python_module": "custom_nodes.ComfyUI-WanVideoWrapper"
+ },
+ "WanVideoLoraSelect": {
+  "input": {
+   "required": {
+    "lora": [
+     [
+      "LongCat_distill_lora_alpha64_bf16.safetensors"
+     ],
+     {
+      "tooltip": "LORA models are expected to be in ComfyUI/models/loras with .safetensors extension"
+     }
+    ],
+    "strength": [
+     "FLOAT",
+     {
+      "default": 1.0,
+      "min": -1000.0,
+      "max": 1000.0,
+      "step": 0.0001,
+      "tooltip": "LORA strength, set to 0.0 to unmerge the LORA"
+     }
+    ]
+   },
+   "optional": {
+    "prev_lora": [
+     "WANVIDLORA",
+     {
+      "default": null,
+      "tooltip": "For loading multiple LoRAs"
+     }
+    ],
+    "blocks": [
+     "SELECTEDBLOCKS"
+    ],
+    "low_mem_load": [
+     "BOOLEAN",
+     {
+      "default": false,
+      "tooltip": "Load the LORA model with less VRAM usage, slower loading. This affects ALL LoRAs, not just the current one. No effect if merge_loras is False"
+     }
+    ],
+    "merge_loras": [
+     "BOOLEAN",
+     {
+      "default": true,
+      "tooltip": "Merge LoRAs into the model, otherwise they are loaded on the fly. Always disabled for GGUF and scaled fp8 models. This affects ALL LoRAs, not just the current one"
+     }
+    ]
+   },
+   "hidden": {
+    "unique_id": "UNIQUE_ID"
+   }
+  },
+  "input_order": {
+   "required": [
+    "lora",
+    "strength"
+   ],
+   "optional": [
+    "prev_lora",
+    "blocks",
+    "low_mem_load",
+    "merge_loras"
+   ],
+   "hidden": [
+    "unique_id"
+   ]
+  },
+  "output": [
+   "WANVIDLORA"
+  ],
+  "output_name": [
+   "lora"
+  ],
+  "name": "WanVideoLoraSelect",
+  "display_name": "WanVideo Lora Select",
+  "category": "WanVideoWrapper",
+  "output_node": false,
+  "python_module": "custom_nodes.ComfyUI-WanVideoWrapper"
+ },
+ "MelBandRoFormerModelLoader": {
+  "input": {
+   "required": {
+    "model_name": [
+     [
+      "LongCat-Avatar_comfy_bf16.safetensors",
+      "MelBandRoformer_fp32.safetensors"
+     ],
+     {
+      "tooltip": "These models are loaded from the 'ComfyUI/models/diffusion_models' -folder"
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "model_name"
+   ]
+  },
+  "output": [
+   "MELROFORMERMODEL"
+  ],
+  "output_name": [
+   "model"
+  ],
+  "name": "MelBandRoFormerModelLoader",
+  "display_name": "Mel-Band RoFormer Model Loader",
+  "category": "Mel-Band RoFormer",
+  "output_node": false,
+  "python_module": "custom_nodes.ComfyUI-MelBandRoFormer"
+ },
+ "MelBandRoFormerSampler": {
+  "input": {
+   "required": {
+    "model": [
+     "MELROFORMERMODEL"
+    ],
+    "audio": [
+     "AUDIO"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "model",
+    "audio"
+   ]
+  },
+  "output": [
+   "AUDIO",
+   "AUDIO"
+  ],
+  "output_name": [
+   "vocals",
+   "instruments"
+  ],
+  "name": "MelBandRoFormerSampler",
+  "display_name": "Mel-Band RoFormer Sampler",
+  "category": "Mel-Band RoFormer",
+  "output_node": false,
+  "python_module": "custom_nodes.ComfyUI-MelBandRoFormer"
+ },
+ "ImageResizeKJv2": {
+  "input": {
+   "required": {
+    "image": [
+     "IMAGE"
+    ],
+    "width": [
+     "INT",
+     {
+      "default": 512,
+      "min": 0,
+      "max": 16384,
+      "step": 1
+     }
+    ],
+    "height": [
+     "INT",
+     {
+      "default": 512,
+      "min": 0,
+      "max": 16384,
+      "step": 1
+     }
+    ],
+    "upscale_method": [
+     [
+      "nearest-exact",
+      "bilinear",
+      "area",
+      "bicubic",
+      "lanczos",
+      "nvidia_rtx_vsr"
+     ]
+    ],
+    "keep_proportion": [
+     [
+      "stretch",
+      "resize",
+      "pad",
+      "pad_edge",
+      "pad_edge_pixel",
+      "crop",
+      "pillarbox_blur",
+      "total_pixels"
+     ],
+     {
+      "default": false
+     }
+    ],
+    "pad_color": [
+     "STRING",
+     {
+      "default": "0, 0, 0",
+      "tooltip": "Color to use for padding."
+     }
+    ],
+    "crop_position": [
+     [
+      "center",
+      "top",
+      "bottom",
+      "left",
+      "right"
+     ],
+     {
+      "default": "center"
+     }
+    ],
+    "divisible_by": [
+     "INT",
+     {
+      "default": 2,
+      "min": 0,
+      "max": 512,
+      "step": 1
+     }
+    ]
+   },
+   "optional": {
+    "mask": [
+     "MASK"
+    ],
+    "device": [
+     [
+      "cpu",
+      "gpu"
+     ]
+    ]
+   },
+   "hidden": {
+    "unique_id": "UNIQUE_ID"
+   }
+  },
+  "input_order": {
+   "required": [
+    "image",
+    "width",
+    "height",
+    "upscale_method",
+    "keep_proportion",
+    "pad_color",
+    "crop_position",
+    "divisible_by"
+   ],
+   "optional": [
+    "mask",
+    "device"
+   ],
+   "hidden": [
+    "unique_id"
+   ]
+  },
+  "output": [
+   "IMAGE",
+   "INT",
+   "INT",
+   "MASK"
+  ],
+  "output_name": [
+   "IMAGE",
+   "width",
+   "height",
+   "mask"
+  ],
+  "name": "ImageResizeKJv2",
+  "display_name": "Resize Image v2",
+  "category": "KJNodes/image",
+  "output_node": false,
+  "python_module": "custom_nodes.ComfyUI-KJNodes"
+ },
+ "GetImageRangeFromBatch": {
+  "input": {
+   "required": {
+    "start_index": [
+     "INT",
+     {
+      "default": 0,
+      "min": -1,
+      "max": 4096,
+      "step": 1
+     }
+    ],
+    "num_frames": [
+     "INT",
+     {
+      "default": 1,
+      "min": 1,
+      "max": 4096,
+      "step": 1
+     }
+    ]
+   },
+   "optional": {
+    "images": [
+     "IMAGE"
+    ],
+    "masks": [
+     "MASK"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "start_index",
+    "num_frames"
+   ],
+   "optional": [
+    "images",
+    "masks"
+   ]
+  },
+  "output": [
+   "IMAGE",
+   "MASK"
+  ],
+  "output_name": [
+   "IMAGE",
+   "MASK"
+  ],
+  "name": "GetImageRangeFromBatch",
+  "display_name": "Get Image or Mask Range From Batch",
+  "category": "KJNodes/image",
+  "output_node": false,
+  "python_module": "custom_nodes.ComfyUI-KJNodes"
+ },
+ "ImageBatchExtendWithOverlap": {
+  "input": {
+   "required": {
+    "source_images": [
+     "IMAGE",
+     {
+      "tooltip": "The source images to extend"
+     }
+    ],
+    "overlap": [
+     "INT",
+     {
+      "default": 13,
+      "min": 1,
+      "max": 4096,
+      "step": 1,
+      "tooltip": "Number of overlapping frames between source and new images"
+     }
+    ],
+    "overlap_side": [
+     [
+      "source",
+      "new_images"
+     ],
+     {
+      "default": "source",
+      "tooltip": "Which side to overlap on"
+     }
+    ],
+    "overlap_mode": [
+     [
+      "cut",
+      "linear_blend",
+      "ease_in_out",
+      "filmic_crossfade",
+      "perceptual_crossfade"
+     ],
+     {
+      "default": "linear_blend",
+      "tooltip": "Method to use for overlapping frames"
+     }
+    ]
+   },
+   "optional": {
+    "new_images": [
+     "IMAGE",
+     {
+      "tooltip": "The new images to extend with"
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "source_images",
+    "overlap",
+    "overlap_side",
+    "overlap_mode"
+   ],
+   "optional": [
+    "new_images"
+   ]
+  },
+  "output": [
+   "IMAGE",
+   "IMAGE",
+   "IMAGE"
+  ],
+  "output_name": [
+   "source_images",
+   "start_images",
+   "extended_images"
+  ],
+  "name": "ImageBatchExtendWithOverlap",
+  "display_name": "Image Batch Extend With Overlap",
+  "category": "KJNodes/image",
+  "output_node": false,
+  "python_module": "custom_nodes.ComfyUI-KJNodes"
+ },
+ "GetImageSizeAndCount": {
+  "input": {
+   "required": {
+    "image": [
+     "IMAGE"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "image"
+   ]
+  },
+  "output": [
+   "IMAGE",
+   "INT",
+   "INT",
+   "INT"
+  ],
+  "output_name": [
+   "image",
+   "width",
+   "height",
+   "count"
+  ],
+  "name": "GetImageSizeAndCount",
+  "display_name": "Get Image Size & Count",
+  "category": "KJNodes/image",
+  "output_node": false,
+  "python_module": "custom_nodes.ComfyUI-KJNodes"
+ },
+ "ReplaceVideoLatentFrames": {
+  "input": {
+   "required": {
+    "destination": [
+     "LATENT",
+     {
+      "tooltip": "The destination latent where frames will be replaced."
+     }
+    ],
+    "index": [
+     "INT",
+     {
+      "tooltip": "The starting latent frame index in the destination latent where the source latent frames will be placed. Negative values count from the end.",
+      "default": 0,
+      "min": -16384,
+      "max": 16384,
+      "step": 1
+     }
+    ]
+   },
+   "optional": {
+    "source": [
+     "LATENT",
+     {
+      "tooltip": "The source latent providing frames to insert into the destination latent. If not provided, the destination latent is returned unchanged."
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "destination",
+    "index"
+   ],
+   "optional": [
+    "source"
+   ]
+  },
+  "output": [
+   "LATENT"
+  ],
+  "output_name": [
+   "LATENT"
+  ],
+  "name": "ReplaceVideoLatentFrames",
+  "display_name": "Replace Video Latent Frames",
+  "category": "model/latent/batch",
+  "output_node": false,
+  "python_module": "comfy_extras.nodes_latent"
+ },
+ "TrimAudioDuration": {
+  "input": {
+   "required": {
+    "audio": [
+     "AUDIO",
+     {}
+    ],
+    "start_index": [
+     "FLOAT",
+     {
+      "tooltip": "Start time in seconds, can be negative to count from the end (supports sub-seconds).",
+      "default": 0.0,
+      "min": -18446744073709551615,
+      "max": 18446744073709551615,
+      "step": 0.01
+     }
+    ],
+    "duration": [
+     "FLOAT",
+     {
+      "tooltip": "Duration in seconds",
+      "default": 60.0,
+      "min": 0.0,
+      "step": 0.01
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "audio",
+    "start_index",
+    "duration"
+   ]
+  },
+  "output": [
+   "AUDIO"
+  ],
+  "output_name": [
+   "AUDIO"
+  ],
+  "name": "TrimAudioDuration",
+  "display_name": "Trim Audio Duration",
+  "category": "audio",
+  "output_node": false,
+  "python_module": "comfy_extras.nodes_audio"
+ },
+ "LoadImage": {
+  "input": {
+   "required": {
+    "image": [
+     [
+      "example.png"
+     ],
+     {
+      "image_upload": true
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "image"
+   ]
+  },
+  "output": [
+   "IMAGE",
+   "MASK"
+  ],
+  "output_name": [
+   "IMAGE",
+   "MASK"
+  ],
+  "name": "LoadImage",
+  "display_name": "Load Image",
+  "category": "image",
+  "output_node": false,
+  "python_module": "nodes"
+ },
+ "LoadAudio": {
+  "input": {
+   "required": {
+    "audio": [
+     "COMBO",
+     {
+      "multiselect": false,
+      "options": [],
+      "audio_upload": true
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "audio"
+   ]
+  },
+  "output": [
+   "AUDIO"
+  ],
+  "output_name": [
+   "AUDIO"
+  ],
+  "name": "LoadAudio",
+  "display_name": "Load Audio",
+  "category": "audio",
+  "output_node": false,
+  "python_module": "comfy_extras.nodes_audio"
+ },
+ "CreateVideo": {
+  "input": {
+   "required": {
+    "images": [
+     "IMAGE",
+     {
+      "tooltip": "The images to create a video from."
+     }
+    ],
+    "fps": [
+     "FLOAT",
+     {
+      "default": 30.0,
+      "min": 1.0,
+      "max": 120.0,
+      "step": 1.0
+     }
+    ]
+   },
+   "optional": {
+    "audio": [
+     "AUDIO",
+     {
+      "tooltip": "The audio to add to the video."
+     }
+    ],
+    "bit_depth": [
+     "COMBO",
+     {
+      "tooltip": "Auto uses 8-bit for sRGB and 10-bit for HDR. Explicit 8-bit and 10-bit choices are independent of colorspace.",
+      "default": "auto",
+      "multiselect": false,
+      "options": [
+       "auto",
+       8,
+       10
+      ]
+     }
+    ],
+    "color_space": [
+     "COMBO",
+     {
+      "tooltip": "Colorspace of the input images. HDR selects BT.2020/HLG and HDR PQ selects BT.2020/PQ.",
+      "default": "sRGB",
+      "multiselect": false,
+      "options": [
+       "sRGB",
+       "HDR",
+       "HDR PQ"
+      ]
+     }
+    ],
+    "codec": [
+     "COMBO",
+     {
+      "tooltip": "Optionally encode the video immediately. None keeps the images in tensor form; Auto uses H.264.",
+      "advanced": true,
+      "default": "none",
+      "multiselect": false,
+      "options": [
+       "none",
+       "auto",
+       "h264",
+       "av1"
+      ]
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "images",
+    "fps"
+   ],
+   "optional": [
+    "audio",
+    "bit_depth",
+    "color_space",
+    "codec"
+   ]
+  },
+  "output": [
+   "VIDEO"
+  ],
+  "output_name": [
+   "VIDEO"
+  ],
+  "name": "CreateVideo",
+  "display_name": "Create Video",
+  "category": "video",
+  "output_node": false,
+  "python_module": "comfy_extras.nodes_video"
+ },
+ "SaveVideo": {
+  "input": {
+   "required": {
+    "video": [
+     "VIDEO",
+     {
+      "tooltip": "The video to save."
+     }
+    ],
+    "filename_prefix": [
+     "STRING",
+     {
+      "tooltip": "The prefix for the file to save. This may include formatting information such as %date:yyyy-MM-dd% or %Empty Latent Image.width% to include values from nodes.",
+      "default": "video/ComfyUI",
+      "multiline": false
+     }
+    ],
+    "format": [
+     "COMFY_DYNAMICCOMBO_V3",
+     {
+      "tooltip": "The output container. Auto uses MP4 for Auto/H.264 and WebM for AV1. MP4, MKV, and WebM select a specific container.",
+      "options": [
+       {
+        "key": "auto",
+        "inputs": {
+         "required": {
+          "codec": [
+           "COMFY_DYNAMICCOMBO_V3",
+           {
+            "tooltip": "The output video codec. Auto preserves a compatible source stream. H.264 and AV1 re-encoding support SDR, HDR (HLG), and HDR PQ.",
+            "options": [
+             {
+              "key": "auto",
+              "inputs": {
+               "required": {}
+              }
+             },
+             {
+              "key": "h264",
+              "inputs": {
+               "required": {},
+               "optional": {
+                "encoding": [
+                 "COMFY_DYNAMICCOMBO_V3",
+                 {
+                  "display_name": "encoding mode",
+                  "tooltip": "Automatic preserves compatible H.264 streams. Re-encode applies custom encoding options.",
+                  "options": [
+                   {
+                    "key": "auto",
+                    "inputs": {
+                     "required": {}
+                    }
+                   },
+                   {
+                    "key": "re-encode",
+                    "inputs": {
+                     "required": {
+                      "crf": [
+                       "FLOAT",
+                       {
+                        "tooltip": "Lower values produce higher quality and larger files.",
+                        "default": 18.0,
+                        "min": 0.0,
+                        "max": 51.0,
+                        "step": 1.0
+                       }
+                      ]
+                     }
+                    }
+                   }
+                  ]
+                 }
+                ]
+               }
+              }
+             },
+             {
+              "key": "av1",
+              "inputs": {
+               "required": {},
+               "optional": {
+                "encoding": [
+                 "COMFY_DYNAMICCOMBO_V3",
+                 {
+                  "display_name": "encoding mode",
+                  "tooltip": "Automatic preserves compatible AV1 streams. Re-encode applies custom encoding options.",
+                  "options": [
+                   {
+                    "key": "auto",
+                    "inputs": {
+                     "required": {}
+                    }
+                   },
+                   {
+                    "key": "re-encode",
+                    "inputs": {
+                     "required": {
+                      "crf": [
+                       "FLOAT",
+                       {
+                        "tooltip": "Lower values produce higher quality and larger files.",
+                        "default": 24.0,
+                        "min": 0.0,
+                        "max": 63.0,
+                        "step": 1.0
+                       }
+                      ]
+                     }
+                    }
+                   }
+                  ]
+                 }
+                ]
+               }
+              }
+             }
+            ]
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "mp4",
+        "inputs": {
+         "required": {
+          "codec": [
+           "COMFY_DYNAMICCOMBO_V3",
+           {
+            "tooltip": "The output video codec. Auto preserves a compatible source stream. H.264 and AV1 re-encoding support SDR, HDR (HLG), and HDR PQ.",
+            "options": [
+             {
+              "key": "auto",
+              "inputs": {
+               "required": {}
+              }
+             },
+             {
+              "key": "h264",
+              "inputs": {
+               "required": {},
+               "optional": {
+                "encoding": [
+                 "COMFY_DYNAMICCOMBO_V3",
+                 {
+                  "display_name": "encoding mode",
+                  "tooltip": "Automatic preserves compatible H.264 streams. Re-encode applies custom encoding options.",
+                  "options": [
+                   {
+                    "key": "auto",
+                    "inputs": {
+                     "required": {}
+                    }
+                   },
+                   {
+                    "key": "re-encode",
+                    "inputs": {
+                     "required": {
+                      "crf": [
+                       "FLOAT",
+                       {
+                        "tooltip": "Lower values produce higher quality and larger files.",
+                        "default": 18.0,
+                        "min": 0.0,
+                        "max": 51.0,
+                        "step": 1.0
+                       }
+                      ]
+                     }
+                    }
+                   }
+                  ]
+                 }
+                ]
+               }
+              }
+             },
+             {
+              "key": "av1",
+              "inputs": {
+               "required": {},
+               "optional": {
+                "encoding": [
+                 "COMFY_DYNAMICCOMBO_V3",
+                 {
+                  "display_name": "encoding mode",
+                  "tooltip": "Automatic preserves compatible AV1 streams. Re-encode applies custom encoding options.",
+                  "options": [
+                   {
+                    "key": "auto",
+                    "inputs": {
+                     "required": {}
+                    }
+                   },
+                   {
+                    "key": "re-encode",
+                    "inputs": {
+                     "required": {
+                      "crf": [
+                       "FLOAT",
+                       {
+                        "tooltip": "Lower values produce higher quality and larger files.",
+                        "default": 24.0,
+                        "min": 0.0,
+                        "max": 63.0,
+                        "step": 1.0
+                       }
+                      ]
+                     }
+                    }
+                   }
+                  ]
+                 }
+                ]
+               }
+              }
+             }
+            ]
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "mkv",
+        "inputs": {
+         "required": {
+          "codec": [
+           "COMFY_DYNAMICCOMBO_V3",
+           {
+            "tooltip": "The output video codec. Auto preserves a compatible source stream. H.264 and AV1 re-encoding support SDR, HDR (HLG), and HDR PQ.",
+            "options": [
+             {
+              "key": "auto",
+              "inputs": {
+               "required": {}
+              }
+             },
+             {
+              "key": "h264",
+              "inputs": {
+               "required": {},
+               "optional": {
+                "encoding": [
+                 "COMFY_DYNAMICCOMBO_V3",
+                 {
+                  "display_name": "encoding mode",
+                  "tooltip": "Automatic preserves compatible H.264 streams. Re-encode applies custom encoding options.",
+                  "options": [
+                   {
+                    "key": "auto",
+                    "inputs": {
+                     "required": {}
+                    }
+                   },
+                   {
+                    "key": "re-encode",
+                    "inputs": {
+                     "required": {
+                      "crf": [
+                       "FLOAT",
+                       {
+                        "tooltip": "Lower values produce higher quality and larger files.",
+                        "default": 18.0,
+                        "min": 0.0,
+                        "max": 51.0,
+                        "step": 1.0
+                       }
+                      ]
+                     }
+                    }
+                   }
+                  ]
+                 }
+                ]
+               }
+              }
+             },
+             {
+              "key": "av1",
+              "inputs": {
+               "required": {},
+               "optional": {
+                "encoding": [
+                 "COMFY_DYNAMICCOMBO_V3",
+                 {
+                  "display_name": "encoding mode",
+                  "tooltip": "Automatic preserves compatible AV1 streams. Re-encode applies custom encoding options.",
+                  "options": [
+                   {
+                    "key": "auto",
+                    "inputs": {
+                     "required": {}
+                    }
+                   },
+                   {
+                    "key": "re-encode",
+                    "inputs": {
+                     "required": {
+                      "crf": [
+                       "FLOAT",
+                       {
+                        "tooltip": "Lower values produce higher quality and larger files.",
+                        "default": 24.0,
+                        "min": 0.0,
+                        "max": 63.0,
+                        "step": 1.0
+                       }
+                      ]
+                     }
+                    }
+                   }
+                  ]
+                 }
+                ]
+               }
+              }
+             }
+            ]
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "webm",
+        "inputs": {
+         "required": {
+          "codec": [
+           "COMFY_DYNAMICCOMBO_V3",
+           {
+            "tooltip": "The output video codec. Auto preserves a compatible source stream. H.264 and AV1 re-encoding support SDR, HDR (HLG), and HDR PQ.",
+            "options": [
+             {
+              "key": "auto",
+              "inputs": {
+               "required": {}
+              }
+             },
+             {
+              "key": "av1",
+              "inputs": {
+               "required": {},
+               "optional": {
+                "encoding": [
+                 "COMFY_DYNAMICCOMBO_V3",
+                 {
+                  "display_name": "encoding mode",
+                  "tooltip": "Automatic preserves compatible AV1 streams. Re-encode applies custom encoding options.",
+                  "options": [
+                   {
+                    "key": "auto",
+                    "inputs": {
+                     "required": {}
+                    }
+                   },
+                   {
+                    "key": "re-encode",
+                    "inputs": {
+                     "required": {
+                      "crf": [
+                       "FLOAT",
+                       {
+                        "tooltip": "Lower values produce higher quality and larger files.",
+                        "default": 24.0,
+                        "min": 0.0,
+                        "max": 63.0,
+                        "step": 1.0
+                       }
+                      ]
+                     }
+                    }
+                   }
+                  ]
+                 }
+                ]
+               }
+              }
+             }
+            ]
+           }
+          ]
+         }
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "optional": {
+    "codec": [
+     "COMFY_DYNAMICCOMBO_V3",
+     {
+      "tooltip": "The output video codec. Auto preserves a compatible source stream. H.264 and AV1 re-encoding support SDR, HDR (HLG), and HDR PQ.",
+      "hidden": true,
+      "options": [
+       {
+        "key": "auto",
+        "inputs": {
+         "required": {}
+        }
+       },
+       {
+        "key": "h264",
+        "inputs": {
+         "required": {},
+         "optional": {
+          "encoding": [
+           "COMFY_DYNAMICCOMBO_V3",
+           {
+            "display_name": "encoding mode",
+            "tooltip": "Automatic preserves compatible H.264 streams. Re-encode applies custom encoding options.",
+            "options": [
+             {
+              "key": "auto",
+              "inputs": {
+               "required": {}
+              }
+             },
+             {
+              "key": "re-encode",
+              "inputs": {
+               "required": {
+                "crf": [
+                 "FLOAT",
+                 {
+                  "tooltip": "Lower values produce higher quality and larger files.",
+                  "default": 18.0,
+                  "min": 0.0,
+                  "max": 51.0,
+                  "step": 1.0
+                 }
+                ]
+               }
+              }
+             }
+            ]
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "av1",
+        "inputs": {
+         "required": {},
+         "optional": {
+          "encoding": [
+           "COMFY_DYNAMICCOMBO_V3",
+           {
+            "display_name": "encoding mode",
+            "tooltip": "Automatic preserves compatible AV1 streams. Re-encode applies custom encoding options.",
+            "options": [
+             {
+              "key": "auto",
+              "inputs": {
+               "required": {}
+              }
+             },
+             {
+              "key": "re-encode",
+              "inputs": {
+               "required": {
+                "crf": [
+                 "FLOAT",
+                 {
+                  "tooltip": "Lower values produce higher quality and larger files.",
+                  "default": 24.0,
+                  "min": 0.0,
+                  "max": 63.0,
+                  "step": 1.0
+                 }
+                ]
+               }
+              }
+             }
+            ]
+           }
+          ]
+         }
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "hidden": {
+    "prompt": [
+     "PROMPT"
+    ],
+    "extra_pnginfo": [
+     "EXTRA_PNGINFO"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "video",
+    "filename_prefix",
+    "format"
+   ],
+   "optional": [
+    "codec"
+   ],
+   "hidden": [
+    "prompt",
+    "extra_pnginfo"
+   ]
+  },
+  "output": [
+   "VIDEO"
+  ],
+  "output_name": [
+   "video"
+  ],
+  "name": "SaveVideo",
+  "display_name": "Save Video",
+  "category": "video",
+  "output_node": true,
+  "python_module": "comfy_extras.nodes_video"
+ },
+ "ImageScale": {
+  "input": {
+   "required": {
+    "image": [
+     "IMAGE"
+    ],
+    "upscale_method": [
+     [
+      "nearest-exact",
+      "bilinear",
+      "area",
+      "bicubic",
+      "lanczos"
+     ]
+    ],
+    "width": [
+     "INT",
+     {
+      "default": 512,
+      "min": 0,
+      "max": 16384,
+      "step": 1
+     }
+    ],
+    "height": [
+     "INT",
+     {
+      "default": 512,
+      "min": 0,
+      "max": 16384,
+      "step": 1
+     }
+    ],
+    "crop": [
+     [
+      "disabled",
+      "center"
+     ]
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "image",
+    "upscale_method",
+    "width",
+    "height",
+    "crop"
+   ]
+  },
+  "output": [
+   "IMAGE"
+  ],
+  "output_name": [
+   "IMAGE"
+  ],
+  "name": "ImageScale",
+  "display_name": "Upscale Image",
+  "category": "image/upscaling",
+  "output_node": false,
+  "python_module": "nodes"
+ },
+ "ImageFromBatch": {
+  "input": {
+   "required": {
+    "image": [
+     "IMAGE",
+     {}
+    ],
+    "batch_index": [
+     "INT",
+     {
+      "default": 0,
+      "min": -16384,
+      "max": 16384
+     }
+    ],
+    "length": [
+     "INT",
+     {
+      "default": 1,
+      "min": 1,
+      "max": 4096
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "image",
+    "batch_index",
+    "length"
+   ]
+  },
+  "output": [
+   "IMAGE"
+  ],
+  "output_name": [
+   "IMAGE"
+  ],
+  "name": "ImageFromBatch",
+  "display_name": "Get Image from Batch",
+  "category": "image/batch",
+  "output_node": false,
+  "python_module": "comfy_extras.nodes_images"
+ },
+ "LoadVideo": {
+  "input": {
+   "required": {
+    "file": [
+     "COMBO",
+     {
+      "multiselect": false,
+      "options": [],
+      "video_upload": true
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "file"
+   ]
+  },
+  "output": [
+   "VIDEO"
+  ],
+  "output_name": [
+   "VIDEO"
+  ],
+  "name": "LoadVideo",
+  "display_name": "Load Video",
+  "category": "video",
+  "output_node": false,
+  "python_module": "comfy_extras.nodes_video"
+ },
+ "GetVideoComponents": {
+  "input": {
+   "required": {
+    "video": [
+     "VIDEO",
+     {
+      "tooltip": "The video to extract components from."
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "video"
+   ]
+  },
+  "output": [
+   "IMAGE",
+   "AUDIO",
+   "FLOAT",
+   "COMBO",
+   "COMBO"
+  ],
+  "output_name": [
+   "images",
+   "audio",
+   "fps",
+   "bit_depth",
+   "color_space"
+  ],
+  "name": "GetVideoComponents",
+  "display_name": "Get Video Components",
+  "category": "video",
+  "output_node": false,
+  "python_module": "comfy_extras.nodes_video"
+ },
+ "ImageBatch": {
+  "input": {
+   "required": {
+    "image1": [
+     "IMAGE"
+    ],
+    "image2": [
+     "IMAGE"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "image1",
+    "image2"
+   ]
+  },
+  "output": [
+   "IMAGE"
+  ],
+  "output_name": [
+   "IMAGE"
+  ],
+  "name": "ImageBatch",
+  "display_name": "Batch Images (DEPRECATED)",
+  "category": "image/batch",
+  "output_node": false,
+  "python_module": "nodes"
+ },
+ "RepeatImageBatch": {
+  "input": {
+   "required": {
+    "image": [
+     "IMAGE",
+     {}
+    ],
+    "amount": [
+     "INT",
+     {
+      "default": 1,
+      "min": 1,
+      "max": 4096
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "image",
+    "amount"
+   ]
+  },
+  "output": [
+   "IMAGE"
+  ],
+  "output_name": [
+   "IMAGE"
+  ],
+  "name": "RepeatImageBatch",
+  "display_name": "Repeat Image Batch",
+  "category": "image/batch",
+  "output_node": false,
+  "python_module": "comfy_extras.nodes_images"
+ }
+}

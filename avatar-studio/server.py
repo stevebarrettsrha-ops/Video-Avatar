@@ -1,0 +1,1254 @@
+"""
+server.py - LongCat Avatar Studio backend.
+
+Run:  python server.py        (opens http://127.0.0.1:7808)
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import mimetypes
+import os
+import random
+import shutil
+import sys
+import threading
+import time
+import uuid
+import webbrowser
+from pathlib import Path
+
+import requests
+
+from flask import Flask, jsonify, request, send_file, send_from_directory
+
+import bootstrap
+import manager
+from bootstrap import (APP_DIR, ComfyProcess, Progress, comfy_online,
+                       comfy_port, detect_comfy_dirs, load_config, normal_url,
+                       save_config)
+import comfy
+from comfy import DEFAULT_SIZE, SIZES, ComfyClient, ComfyError
+
+DATA_DIR = bootstrap.DATA_DIR          # honours AVATAR_STUDIO_DATA
+CLIPS_DIR = DATA_DIR / "clips"
+GALLERY_PATH = DATA_DIR / "gallery.json"
+WEB_DIR = APP_DIR / "web"
+PORT = int(os.environ.get("AVATAR_STUDIO_PORT", "7808"))
+
+app = Flask(__name__, static_folder=None)
+# jsonify alphabetises dict keys by default, which scrambled the setup steps
+# on the one screen where order is the whole point.
+app.json.sort_keys = False
+
+cfg = load_config()
+progress = Progress()
+comfy_proc = ComfyProcess()
+client = ComfyClient(cfg["comfy_url"])
+
+jobs: dict[str, dict] = {}
+jobs_lock = threading.Lock()
+gallery_lock = threading.Lock()
+setup_lock = threading.Lock()
+ws_progress: dict[str, dict] = {}
+# the latest live-preview frame per prompt: {"n", "mime", "data"}
+ws_preview: dict[str, dict] = {}
+
+
+def _image_mime(body: bytes) -> str:
+    if body[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if body[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if body[:4] == b"RIFF" and body[8:12] == b"WEBP":
+        return "image/webp"
+    if body[:4] == b"GIF8":
+        return "image/gif"
+    return ""
+
+
+def take_preview(raw: bytes, current: str | None) -> None:
+    """A binary websocket frame from ComfyUI: keep it if it is a preview.
+
+    The first four bytes are the event: 1 is PREVIEW_IMAGE (then a 4-byte
+    image type, then the image), 4 is PREVIEW_IMAGE_WITH_METADATA (a 4-byte
+    length, JSON naming the prompt, then the image). Anything else is
+    ignored. Only the newest frame per prompt is held.
+    """
+    if len(raw) < 8:
+        return
+    event = int.from_bytes(raw[:4], "big")
+    pid = current
+    if event == 1:
+        body = raw[8:]
+    elif event == 4:
+        size = int.from_bytes(raw[4:8], "big")
+        try:
+            meta = json.loads(raw[8:8 + size])
+        except ValueError:
+            return
+        pid = meta.get("prompt_id") or current
+        body = raw[8 + size:]
+    else:
+        return
+    mime = _image_mime(body)
+    if not pid or not mime:
+        return
+    prev = ws_preview.get(pid)
+    ws_preview[pid] = {"n": (prev["n"] + 1) if prev else 1,
+                       "mime": mime, "data": body}
+    while len(ws_preview) > 16:                  # never a leak of stale frames
+        ws_preview.pop(next(iter(ws_preview)))
+
+
+# --------------------------------------------------------------------------- #
+# gallery
+# --------------------------------------------------------------------------- #
+def read_gallery() -> list[dict]:
+    with gallery_lock:
+        return _read_gallery_unlocked()
+
+
+def _read_gallery_unlocked() -> list[dict]:
+    """Read the gallery while the caller owns ``gallery_lock``.
+
+    Treat a damaged or manually edited file as empty rather than allowing a
+    dict/string to leak into endpoints that expect a list of clip records.
+    """
+    if not GALLERY_PATH.exists():
+        return []
+    try:
+        value = json.loads(GALLERY_PATH.read_text(encoding="utf-8"))
+        if not isinstance(value, list):
+            raise ValueError("not a list")
+    except (OSError, ValueError):
+        # set it aside: the next finished render must not write over it
+        bootstrap.quarantine(GALLERY_PATH)
+        return []
+    # an entry without an id and a file would 500 every lookup after it
+    return [v for v in value if isinstance(v, dict)
+            and v.get("id") and v.get("file")]
+
+
+def _write_gallery_unlocked(items: list[dict]) -> None:
+    bootstrap.atomic_write(GALLERY_PATH, json.dumps(items, indent=2))
+
+
+def write_gallery(items: list[dict]) -> None:
+    with gallery_lock:
+        _write_gallery_unlocked(items)
+
+
+def add_images(items: list[dict]) -> None:
+    # A batch can launch four render threads. Keep the read/modify/write under
+    # one lock or two jobs finishing together can silently discard a clip.
+    with gallery_lock:
+        _write_gallery_unlocked(items + _read_gallery_unlocked())
+
+
+def title_from(p: dict) -> str:
+    text = (p.get("prompt") or "").strip()
+    if text:
+        return " ".join(text.split()[:8]).strip(" ,.!?-")
+    return "Talking clip"
+
+
+# --------------------------------------------------------------------------- #
+# step progress over the ComfyUI websocket (optional dependency)
+# --------------------------------------------------------------------------- #
+def ws_listener() -> None:
+    try:
+        import websocket  # websocket-client
+    except ImportError:
+        return
+    while True:
+        try:
+            url = cfg["comfy_url"].replace("http://", "ws://").replace(
+                "https://", "wss://")
+            ws = websocket.WebSocket()
+            ws.connect(f"{url}/ws?clientId={client.client_id}", timeout=10)
+            # ComfyUI can be silent for minutes while a 28 GB DiT loads, so a
+            # quiet minute is not a dead socket: ping and keep listening. A
+            # half-open socket fails the ping and reconnects.
+            ws.settimeout(60)
+            # ask for previews that name their prompt (event 4)
+            ws.send(json.dumps({"type": "feature_flags",
+                                "data": {"supports_preview_metadata": True}}))
+            current = None
+            while True:
+                try:
+                    raw = ws.recv()
+                except websocket.WebSocketTimeoutException:
+                    if cfg["comfy_url"].replace("http://", "ws://").replace(
+                            "https://", "wss://") != url:
+                        break                     # the address was changed
+                    ws.ping()
+                    continue
+                if isinstance(raw, (bytes, bytearray)):
+                    take_preview(bytes(raw), current)
+                    continue
+                if not isinstance(raw, str):
+                    continue
+                msg = json.loads(raw)
+                mtype, data = msg.get("type"), msg.get("data") or {}
+                # any message naming a prompt says which one is running now;
+                # a plain preview frame (event 1) is credited to it
+                if data.get("prompt_id"):
+                    current = data["prompt_id"]
+                pid = current
+                if mtype == "executing" and pid and data.get("node"):
+                    # a new node: its name is the stage, and the last
+                    # sampler's "step 8 of 8" is no longer what is running
+                    ws_progress[pid] = {"node": str(data["node"])}
+                elif mtype == "progress" and pid:
+                    ws_progress.setdefault(pid, {}).update(
+                        value=data.get("value", 0), max=data.get("max", 0))
+                elif mtype in ("execution_success", "execution_error") and pid:
+                    ws_progress.pop(pid, None)
+                    # the last frame stays (take_preview caps how many): a
+                    # card rendered just before the finish still asks for it
+        except Exception:
+            time.sleep(4)
+        finally:
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+
+def stage_for(class_type: str) -> str:
+    """What a node is doing, in words. Model loading and the first steps are
+    the long silent stretches on a small card, so they are named."""
+    c = class_type or ""
+    if not c:
+        return "Loading the model"
+    if "TextEncode" in c:
+        return "Reading the prompt"
+    if c in ("LoadImage", "ImageResizeKJv2", "ImageScale"):
+        return "Reading the picture"
+    if c in ("LoadAudio", "TrimAudioDuration"):
+        return "Reading the audio"
+    if "MelBand" in c:
+        return "Separating the voice"
+    if "Wav2Vec" in c:
+        return "Listening to the speech"
+    if "Sampler" in c:
+        # the blocks stream onto the GPU as sampling begins
+        return "Moving the model onto the GPU"
+    if "Loader" in c or "Lora" in c or "BlockSwap" in c or "Scheduler" in c:
+        return "Loading the model"
+    if "Extend" in c or "Replace" in c or "GetImageRange" in c:
+        return "Joining the windows"
+    if "Encode" in c:
+        return "Encoding the picture"
+    if "Decode" in c:
+        return "Decoding the frames"
+    if c in ("CreateVideo", "SaveVideo"):
+        return "Writing the video"
+    return c
+
+
+def elapsed(seconds: float) -> str:
+    seconds = int(seconds)
+    return f"{seconds // 60}m {seconds % 60:02d}s" if seconds >= 60 \
+        else f"{seconds}s"
+
+
+# --------------------------------------------------------------------------- #
+# generation job
+# --------------------------------------------------------------------------- #
+class Cancelled(Exception):
+    pass
+
+
+class Failed(Exception):
+    pass
+
+
+def _wait_prompt(job_id: str, prompt_id: str, built: dict, set_state,
+                 started: float) -> list[dict]:
+    """Follow one prompt to its outputs, moving the job's bar and stage.
+
+    The windows count across the whole clip, parts included: window 7 of 24
+    is window 7 of 24 whichever part it is in. Raises Cancelled or Failed.
+    """
+    windows = built["windows"]
+    first = built["this_part"]["first"]
+    parts = len(built["parts"])
+    unreachable_since = None
+    while True:
+        time.sleep(1.0)
+        with jobs_lock:
+            cancelled = jobs[job_id].get("cancelled")
+        # only "cancelled" once ComfyUI has actually let go of it;
+        # otherwise try again next second
+        if cancelled and client.cancel(prompt_id):
+            raise Cancelled()
+        try:
+            err = client.failed(prompt_id)
+            outs = [] if err else client.outputs(prompt_id)
+            unreachable_since = None
+        except requests.RequestException:
+            # a machine paging the DiT through RAM can stall a reply past its
+            # timeout; that is not a failed render. Only an engine gone for
+            # minutes is.
+            unreachable_since = unreachable_since or time.time()
+            if time.time() - unreachable_since > 300:
+                raise Failed("ComfyUI stopped answering for five minutes. "
+                             "Check the Engine page.")
+            continue
+        if err:
+            raise Failed(err)
+        if outs:
+            return outs
+        wp = ws_progress.get(prompt_id) or {}
+        value, maximum = wp.get("value", 0), wp.get("max", 0)
+        took = elapsed(time.time() - started)
+        where = (f" · part {built['part'] + 1} of {parts}" if parts > 1 else "")
+        local = built["samplers"].get(str(wp.get("node") or ""))
+        if maximum and local is not None:
+            # one bar across every window of the clip: each an equal slice
+            window = local                       # samplers map to the clip's
+            done = (window + min(value / maximum, 1)) / windows
+            set_state(pct=round(6 + done * 88, 1),
+                      stage=(f"Window {window + 1} of {windows} · step "
+                             f"{value} of {maximum}{where} · {took}"))
+        else:
+            # no steps to count: the node's name and a running clock say it
+            # is alive, and the bar never walks backwards
+            node = (built["prompt"].get(wp.get("node") or "") or {})
+            with jobs_lock:
+                was = jobs[job_id].get("pct") or 0
+            floor = 6 + first / windows * 88
+            set_state(pct=max(was, floor if first else
+                              min(5 + (time.time() - started) / 8, 12)),
+                      stage=f"{stage_for(node.get('class_type', ''))}{where}"
+                            f" · {took}")
+        if time.time() - started > 48 * 3600:
+            raise Failed("Nothing after two days. On a small card that is "
+                         "usually paging rather than rendering — see the "
+                         "preflight on the Engine page.")
+
+
+def _download(item: dict, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with client.view(item) as resp:
+        resp.raise_for_status()
+        with open(dest, "wb") as fh:
+            for chunk in resp.iter_content(1024 * 256):
+                fh.write(chunk)
+
+
+def _input_file(name: str, dest: Path) -> Path:
+    """A file from ComfyUI/input (the original speech) onto this disk."""
+    sub, _, fname = name.replace("\\", "/").rpartition("/")
+    with requests.get(f"{cfg['comfy_url']}/view",
+                      params={"filename": fname, "subfolder": sub,
+                              "type": "input"}, stream=True, timeout=600) as r:
+        r.raise_for_status()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with open(dest, "wb") as fh:
+            for chunk in r.iter_content(1024 * 256):
+                fh.write(chunk)
+    return dest
+
+
+def run_job(job_id: str, params: dict) -> None:
+    def set_state(**kw):
+        if kw.get("status", "running") != "running":
+            kw["finished"] = time.time()
+        with jobs_lock:
+            jobs[job_id].update(kw)
+
+    work = DATA_DIR / "parts" / job_id
+    try:
+        set_state(stage="Building the graph", pct=2)
+        # one seed for the whole clip: part k's windows take seed + window
+        if params.get("seed") in (None, ""):
+            params["seed"] = random.randint(0, 2**40)
+        layout = comfy.plan(params.get("audio_seconds") or 0.1,
+                            params.get("size"), params.get("windows_per_part"))
+        parts = layout["parts"]
+        set_state(windows=layout["windows"], parts=len(parts),
+                  seed=params["seed"])
+        started = time.time()
+        prev_name = ""
+        part_files: list[tuple[Path, int]] = []
+        built: dict = {}
+        outs: list[dict] = []
+        for part in parts:
+            built = client.build(params, part=part["index"],
+                                 prev_video=prev_name)
+            prompt_id = client.queue(built["prompt"])
+            set_state(prompt_id=prompt_id,
+                      stage="Queued in ComfyUI" if part["index"] == 0
+                      else f"Part {part['index'] + 1} of {len(parts)} queued")
+            outs = _wait_prompt(job_id, prompt_id, built, set_state, started)
+            if len(parts) == 1:
+                break
+            # keep the part, and hand it to ComfyUI for the next one's seam
+            dest = work / f"part_{part['index']:03d}.mp4"
+            _download(outs[0], dest)
+            part_files.append((dest, part["frames"]))
+            if part["index"] + 1 < len(parts):
+                with open(dest, "rb") as fh:
+                    class Up:
+                        filename = f"avatar_{job_id}_part{part['index']:03d}.mp4"
+                        stream = fh
+                        mimetype = "video/mp4"
+                    prev_name = client.upload(Up())
+
+        CLIPS_DIR.mkdir(parents=True, exist_ok=True)
+        clip_id = uuid.uuid4().hex[:12]
+        dest = CLIPS_DIR / f"{clip_id}.mp4"
+        if len(parts) == 1:
+            set_state(stage="Saving", pct=96)
+            ext = Path(outs[0]["filename"]).suffix or ".mp4"
+            dest = CLIPS_DIR / f"{clip_id}{ext}"
+            _download(outs[0], dest)
+        else:
+            set_state(stage=f"Joining {len(parts)} parts into one clip",
+                      pct=95)
+            speech = _input_file(params["audio"], work / "speech"
+                                 / Path(params["audio"]).name)
+            import assemble
+            assemble.assemble(
+                part_files, dest, comfy.FPS, audio=speech,
+                audio_start=float(params.get("audio_start") or 0),
+                audio_seconds=float(params["audio_seconds"]),
+                should_cancel=lambda: jobs[job_id].get("cancelled"))
+        files = built.get("files") or {}
+        saved = [{
+            "id": clip_id, "file": dest.name, "kind": "avatar",
+            "title": params.get("title") or title_from(params),
+            "prompt": params.get("prompt", ""),
+            "image": params.get("image", ""),
+            "audio": params.get("audio", ""),
+            "audio_label": params.get("audio_label", ""),
+            "audio_start": params.get("audio_start") or 0,
+            "audio_seconds": params.get("audio_seconds"),
+            "size": built.get("size"),
+            "width": built.get("width"), "height": built.get("height"),
+            "frames": built.get("frames"), "fps": built.get("fps"),
+            "windows": built.get("windows"), "parts": len(parts),
+            "seconds": built.get("seconds"),
+            "steps": params.get("steps"), "shift": params.get("shift"),
+            "audio_cfg": params.get("audio_cfg"),
+            "audio_scale": params.get("audio_scale"),
+            "quantization": params.get("quantization"),
+            "isolate_voice": params.get("isolate_voice", True),
+            "note": built.get("note", ""),
+            "seed": params["seed"], "batch_index": 0,
+            "model": files.get("dit", ""), "lora": files.get("lora", ""),
+            "created": time.time(),
+        }]
+        add_images(saved)
+        set_state(status="done", pct=100, stage="Ready", images=saved)
+        shutil.rmtree(work, ignore_errors=True)
+    except Cancelled:
+        set_state(status="cancelled", stage="Cancelled")
+        shutil.rmtree(work, ignore_errors=True)
+    except (Failed, ComfyError) as exc:
+        set_state(status="error", error=str(exc), stage="Failed")
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc)
+        if "Cancelled" in msg:
+            set_state(status="cancelled", stage="Cancelled")
+            return
+        set_state(status="error", error=f"{type(exc).__name__}: {exc}",
+                  stage="Failed")
+
+
+# --------------------------------------------------------------------------- #
+# shell
+# --------------------------------------------------------------------------- #
+LOCAL_HOSTS = ("127.0.0.1", "localhost", "[::1]")
+
+
+@app.before_request
+def local_only():
+    """Only this machine's own pages may drive the app.
+
+    Binding to 127.0.0.1 is not enough: any site the person visits can post
+    to it, and DNS rebinding lets one read the answers — and the app runs
+    pip, git and process kills. The Host must name this machine, and a
+    request that changes something must come from this app's own page.
+    """
+    host = (request.host or "").rsplit(":", 1)[0].lower() \
+        if not (request.host or "").startswith("[") \
+        else (request.host or "").split("]")[0].lower() + "]"
+    if host not in LOCAL_HOSTS:
+        return jsonify({"error": "Avatar Studio only answers to localhost."}), 403
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        origin = request.headers.get("Origin")
+        if origin and origin.rstrip("/") != request.host_url.rstrip("/") \
+                and origin.rstrip("/") not in (
+                    f"http://{h}:{PORT}" for h in LOCAL_HOSTS):
+            return jsonify({"error": "Cross-site request refused."}), 403
+
+@app.get("/")
+def index():
+    return send_from_directory(WEB_DIR, "index.html")
+
+
+@app.get("/web/<path:name>")
+def web_asset(name: str):
+    return send_from_directory(WEB_DIR, name)
+
+
+# --------------------------------------------------------------------------- #
+# status / setup
+# --------------------------------------------------------------------------- #
+@app.get("/api/status")
+def api_status():
+    online = comfy_online(cfg["comfy_url"])
+    models_dir = Path(cfg["models_dir"]) if cfg.get("models_dir") else None
+    missing = []
+    if models_dir and models_dir.is_dir():
+        missing = [m["name"] for m in bootstrap.missing_models(models_dir, cfg)]
+    payload = {
+        "comfy_online": online,
+        "setup_complete": bool(cfg.get("setup_complete")),
+        "missing_models": missing,
+        "detected": detect_comfy_dirs(),
+        "precisions": {k: {"label": v["label"], "note": v["note"]}
+                       for k, v in bootstrap.PRECISIONS.items()},
+        "sizes": list(SIZES),
+        "config": {k: cfg.get(k) for k in
+                   ("comfy_url", "comfy_dir", "models_dir", "managed",
+                    "auto_start_comfy", "torch_index", "precision",
+                    "lowvram", "want_melband", "want_manager")},
+        "nodes_ready": False, "ready": False,
+    }
+    if online:
+        try:
+            payload["capabilities"] = client.capabilities()
+            payload["missing_nodes"] = client.missing_nodes()
+            payload["nodes_ready"] = not payload["missing_nodes"]
+            payload["schedulers"] = client.schedulers()
+            payload["dits"] = client.dits()
+            payload["attentions"] = client.attention_modes()
+            payload["quantizations"] = client.quantizations()
+        except Exception as exc:  # noqa: BLE001
+            payload["schema_error"] = str(exc)
+        # The two silent "nothing works" states, named. ComfyUI scans its
+        # model folders once, at startup: weights that landed later are on
+        # disk yet absent from its lists until a restart. And an address can
+        # be answered by a different install than the one set up here.
+        payload["stale_models"] = bool(
+            not missing and models_dir and models_dir.is_dir()
+            and not any("longcat" in u.lower()
+                        for u in payload.get("dits") or []))
+        stats = bootstrap.comfy_stats(cfg["comfy_url"]) or {}
+        payload["engine_argv"] = (stats.get("argv") or [""])[0]
+        payload["engine_mismatch"] = bootstrap.engine_foreign(
+            stats, cfg.get("comfy_dir"))
+        # low-VRAM mode is configured, but the engine answering lacks it
+        payload["engine_lowvram_off"] = bool(
+            cfg.get("lowvram", True)
+            and bootstrap.engine_lowvram(stats) is False)
+        payload["engine_managed"] = comfy_proc.alive()
+    payload["ready"] = bool(online and payload["nodes_ready"] and not missing)
+    return jsonify(payload)
+
+
+def _run_setup(*args) -> None:
+    try:
+        bootstrap.run_setup(*args)
+    finally:
+        manager.forget_torch()     # setup may have (re)installed it
+
+
+@app.post("/api/setup/start")
+def api_setup_start():
+    with setup_lock:
+        if progress.running:
+            return jsonify({"error": "Setup is already running."}), 409
+        progress.__init__()
+        progress.running = True       # claimed here, so a double click is a 409
+    try:
+        b = request.get_json(silent=True) or {}
+        for key in ("comfy_url", "models_dir", "precision", "lowvram",
+                    "want_melband", "want_manager"):
+            if key in b:
+                cfg[key] = b[key]
+        cfg["comfy_url"] = normal_url(cfg["comfy_url"])
+        client.url = cfg["comfy_url"]
+        save_config(cfg)
+        threading.Thread(target=_run_setup,
+                         args=(cfg, progress, comfy_proc, b.get("comfy_dir", ""),
+                               b.get("mode", "auto")), daemon=True).start()
+    except Exception:
+        progress.running = False      # a failed start must not lock setup
+        raise
+    return jsonify({"ok": True})
+
+
+@app.get("/api/setup/state")
+def api_setup_state():
+    snap = progress.snapshot(int(request.args.get("since", 0)))
+    snap["comfy_tail"] = comfy_proc.tail(12)
+    return jsonify(snap)
+
+
+def _note(msg: str) -> None:
+    """Engine actions belong in the engine console, next to its own output."""
+    comfy_proc.note(msg)
+    progress.log(msg)
+
+
+def take_over_port(url: str, port: int):
+    """Close whatever ComfyUI answers on the port.
+
+    Returns ("manager-reboot", None) when ComfyUI-Manager rebooted it in
+    place, ("freed", None) when the port is now empty, or (None, advice)
+    when it cannot be done — with advice that names the actual obstacle,
+    because "close it yourself" against a windowless process is a treasure
+    hunt through Task Manager.
+    """
+    _note("This ComfyUI was not started here — taking it over.")
+    try:
+        r = requests.post(f"{url}/manager/reboot", json={}, timeout=5)
+        accepted = r.status_code in (200, 201, 204)
+    except requests.exceptions.RequestException:
+        accepted = True          # the connection dropping is the reboot
+    if accepted:
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if not comfy_online(url):
+                _note("ComfyUI-Manager took the reboot; waiting for the "
+                      "engine to come back.")
+                return "manager-reboot", None
+            time.sleep(0.5)
+        _note("ComfyUI-Manager did not take the reboot; stopping the "
+              "process instead.")
+
+    def settled_free() -> bool:
+        # a supervisor (ComfyUI Desktop, a launcher .bat) respawns in under
+        # a second — quiet is only free once it stays quiet
+        time.sleep(2.0)
+        return not comfy_online(url) and not bootstrap.port_pids(port)
+
+    first_pids: list[int] = []
+    denied = False
+    for attempt in range(3):
+        pids = bootstrap.port_pids(port)
+        if attempt == 0:
+            first_pids = pids
+        if not pids:
+            if not comfy_online(url) and settled_free():
+                return "freed", None
+            if not comfy_online(url):
+                _note("It came straight back — something restarted it.")
+                continue
+            return None, (f"Something answers on port {port} but its process "
+                          "could not be found — it may belong to another "
+                          "user account. Close it in Task Manager, then "
+                          "press Start ComfyUI.")
+        for pid in pids:
+            cmd = bootstrap.pid_cmdline(pid)
+            _note(f"Port {port} is held by pid {pid}"
+                  + (f": {cmd[:120]}" if cmd else " (command line unreadable)"))
+            if not cmd:
+                # never kill what cannot be identified
+                return None, (f"Port {port} is held by pid {pid}, whose "
+                              "command line could not be read, so it was "
+                              "left alone. Close it yourself, or point "
+                              "Settings at a different address.")
+            if not any(k in cmd.lower()
+                       for k in ("python", "main.py", "comfy")):
+                return None, (f"Port {port} is held by something that does "
+                              f"not look like ComfyUI ({cmd[:90]}). Close it "
+                              "yourself, or point Settings at a different "
+                              "address.")
+        for pid in pids:
+            said = bootstrap.kill_pid(pid)
+            _note(f"Stopping pid {pid} — {said or 'no reply'}")
+            if "denied" in (said or "").lower() \
+                    or "access" in (said or "").lower():
+                denied = True
+        deadline = time.time() + 8
+        while comfy_online(url) and time.time() < deadline:
+            time.sleep(0.5)
+        if not comfy_online(url):
+            if settled_free():
+                return "freed", None
+            _note("It came straight back — something restarted it.")
+            continue
+        _note("Still answering — trying again.")
+
+    now = bootstrap.port_pids(port)
+    if denied:
+        return None, ("Windows refused to stop it (access denied) — it was "
+                      "started as administrator. Run Avatar Studio as "
+                      "administrator once, or close it in Task Manager, "
+                      "then press Start ComfyUI.")
+    if now and set(now) != set(first_pids):
+        return None, ("It keeps coming back under a new process id — "
+                      "something is supervising it (ComfyUI Desktop, or a "
+                      "launcher script). Close that application, then press "
+                      "Start ComfyUI.")
+    return None, ("It would not close. The Engine console shows what was "
+                  "tried; close it in Task Manager, then press Start "
+                  "ComfyUI.")
+
+
+def _refresh_schema_when_up() -> None:
+    """After a (re)start, drop the cached schema the moment the engine
+    answers — otherwise the fresh model scan hides behind the old cache
+    for up to two minutes."""
+    def wait():
+        if bootstrap.wait_for_comfy(cfg["comfy_url"], timeout=900):
+            try:
+                client.schema(force=True)
+            except Exception:
+                pass
+    threading.Thread(target=wait, daemon=True).start()
+
+
+@app.post("/api/comfy/start")
+def api_comfy_start():
+    if comfy_online(cfg["comfy_url"]):
+        return jsonify({"ok": True, "already": True})
+    py = bootstrap.comfy_python(cfg)
+    if not cfg.get("comfy_dir") or not py:
+        return jsonify({"error": "Run setup first."}), 400
+    comfy_proc.start(py, Path(cfg["comfy_dir"]),
+                     comfy_port(cfg["comfy_url"]), progress,
+                     cfg.get("lowvram", True))
+    _refresh_schema_when_up()
+    return jsonify({"ok": True})
+
+
+@app.post("/api/comfy/restart")
+def api_comfy_restart():
+    """Stop and start ComfyUI, so it rescans its model folders and loads
+    newly installed nodes — the two things only a restart does.
+
+    An engine this app did not start (an orphan from an earlier run, or one
+    launched by hand) is taken over rather than declared unreachable: first
+    ComfyUI-Manager's own reboot, and failing that the process holding the
+    configured port is verified to look like ComfyUI and stopped, then a
+    managed one starts in its place. The old advice — "close it yourself" —
+    asked people to hunt a windowless python in Task Manager.
+    """
+    url = cfg["comfy_url"]
+    port = comfy_port(url)
+    py = bootstrap.comfy_python(cfg)
+    can_start = bool(cfg.get("comfy_dir") and py)
+
+    if comfy_proc.alive():
+        if not can_start:
+            return jsonify({"error": "Run setup first."}), 400
+        _note("Restarting the managed engine…")
+        comfy_proc.stop()
+        comfy_proc.start(py, Path(cfg["comfy_dir"]), port, progress,
+                         cfg.get("lowvram", True))
+        _refresh_schema_when_up()
+        return jsonify({"ok": True, "how": "managed"})
+
+    if not comfy_online(url):
+        if not can_start:
+            return jsonify({"error": "Run setup first."}), 400
+        _note("Starting ComfyUI…")
+        comfy_proc.start(py, Path(cfg["comfy_dir"]), port, progress,
+                         cfg.get("lowvram", True))
+        _refresh_schema_when_up()
+        return jsonify({"ok": True, "how": "started"})
+
+    # online, but not ours — take it over
+    how, advice = take_over_port(url, port)
+    if advice:
+        return jsonify({"error": advice}), 409
+    if how == "manager-reboot":
+        _refresh_schema_when_up()
+        return jsonify({"ok": True, "how": "manager-reboot"})
+    if not can_start:
+        return jsonify({"ok": True, "how": "stopped",
+                        "note": "Stopped it. This app has no ComfyUI of its "
+                                "own to start — run setup, or start yours "
+                                "again yourself."})
+    _note("Starting a managed engine in its place…")
+    comfy_proc.start(py, Path(cfg["comfy_dir"]), port, progress,
+                     cfg.get("lowvram", True))
+    _refresh_schema_when_up()
+    return jsonify({"ok": True, "how": "takeover"})
+
+
+@app.get("/api/comfy/log")
+def api_comfy_log():
+    """The engine's own console — the visible cue that it is starting,
+    started, or telling you exactly what failed to import."""
+    n = min(max(int(request.args.get("n", 80)), 1), 400)
+    return jsonify({"lines": comfy_proc.tail(n),
+                    "running": comfy_proc.alive(),
+                    "online": comfy_online(cfg["comfy_url"])})
+
+
+@app.post("/api/config")
+def api_config():
+    b = request.get_json(silent=True) or {}
+    for key in ("comfy_url", "comfy_dir", "models_dir", "auto_start_comfy",
+                "torch_index", "precision", "lowvram",
+                "want_melband", "want_manager"):
+        if key in b:
+            cfg[key] = b[key]
+    cfg["comfy_url"] = normal_url(cfg["comfy_url"])
+    client.url = cfg["comfy_url"]
+    save_config(cfg)
+    return jsonify({"ok": True})
+
+
+# --------------------------------------------------------------------------- #
+# dependencies / tasks
+# --------------------------------------------------------------------------- #
+@app.get("/api/deps")
+def api_deps():
+    live = client if comfy_online(cfg["comfy_url"]) else None
+    return jsonify({"items": manager.dependencies(cfg, live,
+                                                  starting=comfy_proc.alive()),
+                    "torch_index": cfg.get("torch_index", "")})
+
+
+@app.post("/api/deps/<path:dep_id>/install")
+def api_dep_install(dep_id: str):
+    b = request.get_json(silent=True) or {}
+    if b.get("torch_index") is not None:
+        cfg["torch_index"] = b["torch_index"]
+        save_config(cfg)
+    try:
+        return jsonify({"ok": True,
+                        "task": manager.install_dependency(dep_id, cfg, b).view()})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.get("/api/tasks")
+def api_tasks():
+    task_id = request.args.get("id", "")
+    since = int(request.args.get("since", 0))
+    if task_id:
+        task = manager.TASKS.get(task_id)
+        if not task:
+            return jsonify({"error": "No such task."}), 404
+        return jsonify(task.view(since))
+    return jsonify([t.view(t.view()["cursor"]) for t in manager.TASKS.list()[:25]])
+
+
+@app.post("/api/tasks/<task_id>/cancel")
+def api_task_cancel(task_id: str):
+    task = manager.TASKS.get(task_id)
+    if task:
+        task.cancel = True
+    return jsonify({"ok": True})
+
+
+# --------------------------------------------------------------------------- #
+# huggingface
+# --------------------------------------------------------------------------- #
+@app.get("/api/hf/settings")
+def api_hf_settings():
+    token = cfg.get("hf_token") or ""
+    return jsonify({"endpoint": cfg.get("hf_endpoint") or manager.DEFAULT_ENDPOINT,
+                    "token_set": bool(token),
+                    "token_hint": ("…" + token[-4:]) if len(token) > 4 else "",
+                    "repo": cfg.get("hf_repo") or bootstrap.MODEL_REPO,
+                    "curated": manager.curated(cfg),
+                    "folders": manager.MODEL_FOLDERS,
+                    "models_dir": cfg.get("models_dir", "")})
+
+
+@app.post("/api/hf/settings")
+def api_hf_settings_save():
+    b = request.get_json(silent=True) or {}
+    if "token" in b:
+        cfg["hf_token"] = (b["token"] or "").strip()
+    if b.get("endpoint") is not None:
+        cfg["hf_endpoint"] = b["endpoint"].strip() or manager.DEFAULT_ENDPOINT
+    if b.get("repo"):
+        cfg["hf_repo"] = b["repo"].strip()
+    if b.get("models_dir"):
+        cfg["models_dir"] = b["models_dir"].strip()
+    if b.get("precision") in bootstrap.PRECISIONS:
+        cfg["precision"] = b["precision"]
+    save_config(cfg)
+    return jsonify({"ok": True})
+
+
+@app.get("/api/hf/browse")
+def api_hf_browse():
+    repo = (request.args.get("repo") or cfg.get("hf_repo") or "").strip()
+    try:
+        data = manager.hf_browse(cfg, repo)
+        cfg["hf_repo"] = repo
+        save_config(cfg)
+        return jsonify(data)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.post("/api/hf/download")
+def api_hf_download():
+    b = request.get_json(silent=True) or {}
+    try:
+        if b.get("set"):
+            tasks = manager.download_set(cfg)
+            if not tasks:
+                return jsonify({"ok": True, "tasks": [],
+                                "note": "Everything in that set is already here."})
+            return jsonify({"ok": True, "tasks": [t.view() for t in tasks]})
+        path = (b.get("path") or "").strip()
+        if not path:
+            return jsonify({"error": "Pick a file to download."}), 400
+        task = manager.hf_download(cfg, b.get("repo") or cfg.get("hf_repo")
+                                   or bootstrap.MODEL_REPO, path,
+                                   b.get("folder") or "")
+        return jsonify({"ok": True, "task": task.view()})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.get("/api/hf/local")
+def api_hf_local():
+    return jsonify({"models": manager.local_models(cfg),
+                    "models_dir": cfg.get("models_dir", "")})
+
+
+@app.delete("/api/hf/local")
+def api_hf_delete():
+    b = request.get_json(silent=True) or {}
+    try:
+        manager.delete_model(cfg, b.get("folder", ""), b.get("name", ""))
+        return jsonify({"ok": True})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 400
+
+
+# --------------------------------------------------------------------------- #
+# generation
+# --------------------------------------------------------------------------- #
+def _number(params: dict, key: str, default, low, high, kind=float):
+    """A setting from the page, or a 400 that names it."""
+    raw = params.get(key, default)
+    if raw in (None, ""):
+        raw = default
+    if isinstance(raw, bool):
+        raise ValueError(f"{key} must be a number.")
+    try:
+        value = kind(raw)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(f"{key} must be a number.")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{key} must be a number.")
+    if not low <= value <= high:
+        raise ValueError(f"{key} must be between {low} and {high}.")
+    return value
+
+
+@app.post("/api/generate")
+def api_generate():
+    params = request.get_json(silent=True) or {}
+    if not isinstance(params, dict):
+        return jsonify({"error": "Send generation settings as an object."}), 400
+    for key in ("prompt", "image", "audio", "negative", "audio_label"):
+        if not isinstance(params.get(key) or "", str):
+            return jsonify({"error": f"{key} must be text."}), 400
+    if not (params.get("image") or "").strip():
+        return jsonify({"error": "Add a picture of the person first."}), 400
+    if not (params.get("audio") or "").strip():
+        return jsonify({"error": "Add the speech — record it, or choose an "
+                                 "audio file."}), 400
+    try:
+        runs = _number(params, "runs", 1, 1, 4, int)
+        params["audio_seconds"] = _number(params, "audio_seconds", 0, 0.1,
+                                          comfy.MAX_SECONDS)
+        params["audio_start"] = _number(params, "audio_start", 0, 0, 36000)
+        params["steps"] = _number(params, "steps", 12, 1, 60, int)
+        params["shift"] = _number(params, "shift", 12, 0, 100)
+        params["cfg"] = _number(params, "cfg", 1, 0, 30)
+        params["audio_cfg"] = _number(params, "audio_cfg", 2, 0, 20)
+        params["audio_scale"] = _number(params, "audio_scale", 1, 0, 10)
+        params["lora_strength"] = _number(params, "lora_strength", 1, 0, 2)
+        params["blocks_to_swap"] = _number(params, "blocks_to_swap", 40, 0,
+                                           48, int)
+        params["ref_frame_index"] = _number(params, "ref_frame_index", 10,
+                                            -100, 1000, int)
+        params["ref_mask_frame_range"] = _number(
+            params, "ref_mask_frame_range", 3, 0, 20, int)
+        if params.get("windows_per_part") not in (None, ""):
+            params["windows_per_part"] = _number(params, "windows_per_part",
+                                                 2, 1, 24, int)
+        if params.get("seed") not in (None, ""):
+            params["seed"] = _number(params, "seed", 0, 0, 2**63, int)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    params["size"] = params.get("size") or DEFAULT_SIZE
+    if params["size"] not in SIZES:
+        return jsonify({"error": "Size must be one of "
+                                 + ", ".join(k.replace("x", "×") for k in SIZES)
+                                 + "."}), 400
+    if not params.get("quantization"):
+        params["quantization"] = bootstrap.PRECISIONS.get(
+            cfg.get("precision") or "fp8",
+            bootstrap.PRECISIONS["fp8"])["quantization"]
+    if not comfy_online(cfg["comfy_url"]):
+        return jsonify({"error": "ComfyUI is not running. Start it from the "
+                                 "Engine page."}), 503
+    created = []
+    for run in range(runs):
+        job_id = uuid.uuid4().hex[:12]
+        job_params = dict(params)
+        # a fixed seed gives each run its own neighbour, not the same clip 4x
+        # (each window takes seed + its index, so runs step by a thousand)
+        if params.get("seed") not in (None, ""):
+            job_params["seed"] = int(params["seed"]) + run * 1000
+        with jobs_lock:
+            jobs[job_id] = {"id": job_id, "status": "running", "pct": 0,
+                            "stage": "Starting", "created": time.time(),
+                            "size": params["size"],
+                            "title": params.get("title") or title_from(params)}
+        threading.Thread(target=run_job, args=(job_id, job_params),
+                         daemon=True).start()
+        created.append(job_id)
+        time.sleep(0.2)
+    return jsonify({"jobs": created})
+
+
+@app.get("/api/jobs")
+def api_jobs():
+    with jobs_lock:
+        # finished jobs are only listed for three minutes; keep an hour for
+        # the preview endpoint and drop the rest, or a long session grows
+        cutoff = time.time() - 3600
+        for jid in [k for k, j in jobs.items() if j["status"] != "running"
+                    and j.get("finished", j["created"]) < cutoff]:
+            del jobs[jid]
+        active = [j for j in jobs.values()
+                  if j["status"] == "running"
+                  or time.time() - j.get("finished", j["created"]) < 180]
+        out = []
+        for j in sorted(active, key=lambda j: j["created"], reverse=True):
+            frame = ws_preview.get(j.get("prompt_id") or "") \
+                if j["status"] == "running" else None
+            out.append(dict(j, preview=frame["n"]) if frame else j)
+        return jsonify(out)
+
+
+@app.get("/api/jobs/<job_id>/preview")
+def api_job_preview(job_id: str):
+    """The newest live-preview frame of a running job."""
+    with jobs_lock:
+        job = jobs.get(job_id)
+        pid = job.get("prompt_id") if job else None
+    frame = ws_preview.get(pid or "")
+    if not frame:
+        return jsonify({"error": "No preview yet."}), 404
+    resp = app.response_class(frame["data"], mimetype=frame["mime"])
+    # each frame has its own ?n= URL, so a cached one is never stale
+    resp.headers["Cache-Control"] = "private, max-age=300"
+    return resp
+
+
+@app.post("/api/jobs/<job_id>/cancel")
+def api_job_cancel(job_id: str):
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            return jsonify({"error": "No such job."}), 404
+        if job["status"] != "running":
+            return jsonify({"error": "That job has already finished."}), 409
+        job["cancelled"] = True
+    # run_job sees the flag within a second and stops this prompt alone
+    return jsonify({"ok": True})
+
+
+@app.post("/api/upload")
+def api_upload():
+    if "file" not in request.files:
+        return jsonify({"error": "No file received."}), 400
+    try:
+        return jsonify({"ok": True,
+                        "name": client.upload(request.files["file"])})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.get("/api/input")
+def api_input():
+    """A file the page uploaded earlier, back from ComfyUI/input — the
+    picture on a clip reopened tomorrow, when its blob URL is long gone."""
+    name = (request.args.get("name") or "").replace("\\", "/")
+    if not name or ".." in name.split("/") or name.startswith("/"):
+        return jsonify({"error": "Bad name."}), 400
+    sub, _, fname = name.rpartition("/")
+    try:
+        r = requests.get(f"{cfg['comfy_url']}/view",
+                         params={"filename": fname, "subfolder": sub,
+                                 "type": "input"}, timeout=30)
+    except requests.RequestException:
+        return jsonify({"error": "ComfyUI is not answering."}), 503
+    if r.status_code != 200:
+        return jsonify({"error": "Not found."}), 404
+    mime = (r.headers.get("Content-Type") or "").split(";")[0].strip()
+    # only media goes back to the page: a picture, or the speech
+    if not mime.startswith(("image/", "audio/", "video/")):
+        mime = mimetypes.guess_type(fname)[0] or ""
+    if not mime.startswith(("image/", "audio/", "video/")):
+        return jsonify({"error": "Not a media file."}), 415
+    resp = app.response_class(r.content, mimetype=mime)
+    resp.headers["Cache-Control"] = "private, max-age=3600"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
+
+@app.get("/api/preflight")
+def api_preflight():
+    return jsonify(bootstrap.preflight(cfg))
+
+
+# --------------------------------------------------------------------------- #
+# gallery
+# --------------------------------------------------------------------------- #
+@app.get("/api/clips")
+def api_clips():
+    return jsonify(read_gallery())
+
+
+@app.get("/api/clip/<image_id>")
+def api_clip(image_id: str):
+    for item in read_gallery():
+        if item["id"] == image_id:
+            path = CLIPS_DIR / item["file"]
+            if not path.exists():
+                return jsonify({"error": "That file is missing."}), 404
+            mime = mimetypes.guess_type(path.name)[0] or "video/mp4"
+            # a header cannot carry a newline, and a prompt-made title can
+            name = " ".join(str(item.get("title") or "clip").split())[:120]
+            return send_file(path, mimetype=mime, conditional=True,
+                             download_name=f"{name or 'clip'}{path.suffix}")
+    return jsonify({"error": "Clip not found."}), 404
+
+
+@app.delete("/api/clip/<image_id>")
+def api_clip_delete(image_id: str):
+    # Serialize deletion with render completion so a stale snapshot cannot
+    # erase a clip that was added while the file was being removed.
+    with gallery_lock:
+        items = _read_gallery_unlocked()
+        for item in items:
+            if item.get("id") == image_id:
+                # Windows refuses while a player still has it open; the page
+                # lets go first, and a moment's retry covers the rest
+                for _ in range(10):
+                    try:
+                        (CLIPS_DIR / item["file"]).unlink(missing_ok=True)
+                        break
+                    except PermissionError:
+                        time.sleep(0.2)
+                    except (KeyError, OSError):
+                        break
+        _write_gallery_unlocked([i for i in items if i.get("id") != image_id])
+    return jsonify({"ok": True})
+
+
+def ensure_engine_at_boot() -> None:
+    """A launch ends with a working engine, without a button pressed.
+
+    Offline: start the managed one. Online and healthy: adopt it. Online but
+    useless — a stale scan hiding the weights, installed nodes it never
+    loaded, or a different install squatting the port — replace it, with the
+    same looks-like-ComfyUI guard the Restart button uses. An external-mode
+    setup (managed False) is never touched: that engine is the person's own.
+    """
+    if not (cfg.get("setup_complete") and cfg.get("auto_start_comfy", True)):
+        return
+    py = bootstrap.comfy_python(cfg)
+    if not cfg.get("comfy_dir") or not py:
+        return
+    url = cfg["comfy_url"]
+    port = comfy_port(url)
+
+    if not comfy_online(url):
+        _note("Starting ComfyUI…")
+        comfy_proc.start(py, Path(cfg["comfy_dir"]), port, progress,
+                         cfg.get("lowvram", True))
+        _refresh_schema_when_up()
+        return
+
+    # something already answers — decide between adopting and replacing
+    reasons = []
+    try:
+        client.schema(force=True)
+        has_nodes = client.has(comfy.EXTEND)
+        dits = client.dits()
+    except Exception as exc:  # noqa: BLE001
+        _note(f"The engine already running would not describe itself "
+              f"({exc}) — leaving it alone.")
+        return
+    models_dir = Path(cfg["models_dir"]) if cfg.get("models_dir") else None
+    weights_here = bool(models_dir and models_dir.is_dir() and
+                        not bootstrap.missing_models(models_dir, cfg))
+    if weights_here and not any("longcat" in u.lower() for u in dits):
+        reasons.append("it started before the weights landed")
+    if not has_nodes and weights_here:
+        reasons.append("the LongCat Avatar nodes are not loaded")
+    for node in bootstrap.CUSTOM_NODES:
+        marker = bootstrap.NODE_MARKERS.get(node["id"])
+        if marker and bootstrap.node_installed(Path(cfg["comfy_dir"]), node) \
+                and not client.has(marker):
+            reasons.append(f"{node['label']} is installed but not loaded")
+    stats = bootstrap.comfy_stats(url) or {}
+    if bootstrap.engine_foreign(stats, cfg["comfy_dir"]):
+        reasons.append("a different install is answering the address")
+    if cfg.get("lowvram", True) and bootstrap.engine_lowvram(stats) is False:
+        reasons.append("it was started without low-VRAM mode (--lowvram)")
+
+    if not reasons:
+        _note(f"Adopting the ComfyUI already running at {url}.")
+        return
+    if not cfg.get("managed", True):
+        _note("The engine already running has problems ("
+              + "; ".join(reasons) + ") but it is yours, not this app's — "
+              "restart it yourself, or press Restart ComfyUI.")
+        return
+    _note("The engine already running is no use as it stands — "
+          + "; ".join(reasons) + ". Replacing it.")
+    how, advice = take_over_port(url, port)
+    if advice:
+        _note(advice)
+        return
+    if how == "manager-reboot":
+        _refresh_schema_when_up()
+        return
+    _note("Starting a managed engine in its place…")
+    comfy_proc.start(py, Path(cfg["comfy_dir"]), port, progress,
+                     cfg.get("lowvram", True))
+    _refresh_schema_when_up()
+
+
+# --------------------------------------------------------------------------- #
+def main() -> None:
+    # a redirected console on Windows is cp1252: no log line may crash it
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:
+            pass
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    CLIPS_DIR.mkdir(parents=True, exist_ok=True)
+    threading.Thread(target=ws_listener, daemon=True).start()
+    # the engine comes up on its own; the page can open meanwhile
+    threading.Thread(target=ensure_engine_at_boot, daemon=True).start()
+    url = f"http://127.0.0.1:{PORT}"
+    print(f"\n  LongCat Avatar Studio  ->  {url}\n")
+    if os.environ.get("AVATAR_STUDIO_NO_BROWSER") != "1":
+        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    try:
+        app.run(host="127.0.0.1", port=PORT, threaded=True, debug=False)
+    finally:
+        comfy_proc.stop()
+
+
+if __name__ == "__main__":
+    main()
