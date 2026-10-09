@@ -510,6 +510,8 @@ def hf_browse(cfg: dict, repo: str, revision: str = "main") -> dict:
 def hf_download(cfg: dict, repo: str, path: str, folder: str = "") -> Task:
     if not cfg.get("models_dir"):
         raise RuntimeError("Set the ComfyUI models folder before downloading.")
+    if bootstrap.models_location_unavailable(cfg):
+        raise RuntimeError(f"The previously verified models folder is unavailable: {cfg['models_dir']}. Reconnect it, or explicitly choose another folder before downloading.")
     root = Path(cfg["models_dir"])
     folder = folder if folder in MODEL_FOLDERS else guess_folder(path, repo)
     name = Path(path).name

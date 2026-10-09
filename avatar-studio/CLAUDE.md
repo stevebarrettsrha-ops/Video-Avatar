@@ -122,6 +122,10 @@ file disappears or Recheck is pressed. A small custom node registers
 Settings' shared models folder with the local engine without rewriting the
 person's YAML or copying weights. Incomplete safetensors and LFS pointers
 do not count as installed; this is not a model identity/checksum check.
+A missing separate models root is retained, not replaced by an empty stock
+folder. Only a relocated engine's own models folder follows that engine;
+a separately rebased folder must hold valid required weights. A previously
+verified missing root cannot silently become a new download destination.
 `AVATAR_STUDIO_NO_SEARCH=1` (set by every
 test that starts the server) turns it off: test configs name made-up folders
 on purpose.

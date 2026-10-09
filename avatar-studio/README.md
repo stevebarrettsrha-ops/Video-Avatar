@@ -46,7 +46,10 @@ Verified file locations are saved. Routine polling checks those exact
 files; relocation runs only when a saved location fails. An unsuccessful
 search is not repeated until you press **Engine → Recheck** or change the
 configured location. Recheck also discovers files you moved into a new
-subfolder. Completed files are not downloaded again, even through the
+subfolder. A missing shared folder stays selected; an empty stock folder
+does not replace it. Downloads into a previously verified folder wait
+until you reconnect it or explicitly select another destination.
+Completed files are not downloaded again, even through the
 single-file download action; delete a damaged file before intentionally
 replacing it. Empty files, Git LFS pointers and structurally incomplete
 safetensors are treated as missing. This checks file structure, not a

@@ -817,6 +817,52 @@ def rebase_path(old: str) -> Path | None:
     return None
 
 
+def _heal_models_path(cfg: dict, old_comfy: str, comfy: Path | None) -> list[str]:
+    """Retain a separate missing models root until its own location is found.
+
+    An empty stock folder is not evidence that an unplugged shared drive
+    moved. Only the old engine's own models folder follows an engine move;
+    a separately rebased folder must actually hold the required weights.
+    """
+    old = cfg.get("models_dir") or ""
+    if old and Path(old).is_dir():
+        return []
+    normal = lambda path: os.path.normcase(str(path)).replace("\\", "/").rstrip("/")
+    follows_engine = bool(old_comfy and old and comfy
+                          and normal(old) == normal(old_comfy) + "/models"
+                          and normal(old_comfy) != normal(comfy))
+    candidate = None
+    if comfy and (not old or follows_engine) and (comfy / "models").is_dir():
+        candidate = comfy / "models"
+    elif old:
+        moved = rebase_path(old)
+        # Isolate this lookup: a complete set in ComfyUI's other folders or
+        # extra_model_paths must not make an empty rebased folder look valid.
+        if moved and moved.is_dir() and not missing_models(moved, {}):
+            candidate = moved
+    if candidate is None or str(candidate) == old:
+        return []
+    cfg["models_dir"] = str(candidate)
+    return [f"Models folder found at {candidate}"]
+
+
+def models_location_unavailable(cfg: dict) -> bool:
+    """A previously verified root disappeared; do not recreate its mount.
+
+    An explicitly selected new folder remains a valid download destination.
+    Older configs can prove verification through their saved model hits.
+    """
+    saved = cfg.get("models_dir") or ""
+    if not saved or Path(saved).is_dir():
+        return False
+    if cfg.get("_verified_models_dir") == saved:
+        return True
+    root = Path(saved).resolve()
+    hits = (cfg.get("_model_locations") or {}).get("files", {})
+    return any(path and Path(path).resolve().is_relative_to(root)
+               for path in hits.values())
+
+
 def heal_paths(cfg: dict) -> list[str]:
     """Repair saved paths that no longer exist. Returns what changed."""
     notes: list[str] = []
@@ -831,15 +877,7 @@ def heal_paths(cfg: dict) -> list[str]:
                 comfy = c
                 notes.append(f"ComfyUI found at {c}")
                 break
-    old_models = cfg.get("models_dir") or ""
-    if not (old_models and Path(old_models).is_dir()):
-        moved = rebase_path(old_models)
-        if moved and moved.is_dir():
-            cfg["models_dir"] = str(moved)
-        elif comfy and (comfy / "models").is_dir():
-            cfg["models_dir"] = str(comfy / "models")
-        if cfg.get("models_dir") != old_models:
-            notes.append(f"Models folder found at {cfg['models_dir']}")
+    notes.extend(_heal_models_path(cfg, old_comfy, comfy))
     py = cfg.get("python") or ""
     if py and not Path(py).exists():
         moved = rebase_path(py)
@@ -972,6 +1010,9 @@ def verify_locations(cfg: dict, search: bool = True,
     restart must not repeat the same failed directory/drive searches.
     """
     say = log or (lambda _m: None)
+    if cfg.get("models_dir") and (Path(cfg["models_dir"]).is_dir()
+                                  or models_location_unavailable(cfg)):
+        cfg["_verified_models_dir"] = cfg["models_dir"]
     if force:
         clear_model_cache(cfg)
         cfg.pop("_location_check", None)
@@ -991,17 +1032,17 @@ def verify_locations(cfg: dict, search: bool = True,
         hit = pick_comfy(find_comfy_installs(), cfg)
         searched = True
         if hit:
+            old_comfy = cfg.get("comfy_dir") or ""
             cfg["comfy_dir"] = str(hit)
             notes.append(f"ComfyUI found at {hit}")
-            models = cfg.get("models_dir") or ""
-            if not (models and Path(models).is_dir()) and (hit / "models").is_dir():
-                cfg["models_dir"] = str(hit / "models")
-                notes.append(f"Models folder found at {cfg['models_dir']}")
+            notes.extend(_heal_models_path(cfg, old_comfy, hit))
             state = _location_state(cfg)
         else:
             say("No ComfyUI found on this computer — install it from the "
                 "Engine page, set its folder in Settings, or press Recheck "
                 "after moving it.")
+    if cfg.get("models_dir") and Path(cfg["models_dir"]).is_dir():
+        cfg["_verified_models_dir"] = cfg["models_dir"]
     if state["missing"]:
         cfg["_location_check"] = {"state": state, "searched": searched}
     else:
@@ -2123,10 +2164,13 @@ def run_setup(cfg: dict, prog: Progress, comfy: ComfyProcess,
             prog.finish("deps", f"Installed into {Path(cfg['python']).name}")
 
         prog.begin("models")
+        unavailable = models_location_unavailable(cfg)
         todo = missing_models(models_dir, cfg) + missing_extras(models_dir, cfg)
         if not todo:
             prog.finish("models", "Everything is already downloaded")
         else:
+            if unavailable:
+                raise RuntimeError(f"The previously verified models folder is unavailable: {models_dir}. Reconnect it, or explicitly choose another folder before downloading.")
             for note in preflight(cfg)["notes"]:
                 prog.log("Preflight: " + note)
             # Ask each repo for the real sizes so one bar can cover the whole
