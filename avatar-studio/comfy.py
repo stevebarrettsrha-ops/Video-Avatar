@@ -1025,9 +1025,10 @@ class ComfyClient:
                             "wav2vec" in str(data.get("node_type", "")).lower():
                         return ("MultiTalkWav2VecEmbeds: ComfyUI has "
                                 "transformers 5, which returns nothing from "
-                                "wav2vec2. Restart the engine from the app "
-                                "(Engine page) and it installs 4.x, or run: "
-                                "python -m pip install \"transformers<5\"")
+                                "wav2vec2. Press Restart ComfyUI on the Engine "
+                                "page: the app adds its compatibility node "
+                                "first. Or install 4.x: python -m pip install "
+                                "\"transformers<5\"")
                     if "out of memory" in low:
                         return (f"{data.get('node_type')}: out of memory. Use "
                                 "480p, raise Block swap in Settings, keep fp8 "

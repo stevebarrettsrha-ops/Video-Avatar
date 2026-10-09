@@ -160,6 +160,9 @@ def fake_install(root: Path, stale_first_boot: bool = False) -> Path:
         p.add_argument("--cache-none", action="store_true")
         p.add_argument("--preview-method")
         a = p.parse_args()
+        if (here / "custom_nodes" / "avatar_studio_compat"
+                / "__init__.py").exists():
+            os.environ["MOCK_EXTRA_NODES"] = "AvatarStudioCompat"
         flag = here / "stale.flag"
         if flag.exists():
             os.environ["MOCK_BLANK_UNETS"] = "999999"

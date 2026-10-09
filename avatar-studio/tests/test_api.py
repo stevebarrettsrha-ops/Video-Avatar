@@ -293,8 +293,8 @@ def run(slow: bool = False) -> Suite:
                     f"{job.get('status')} {job.get('error', '')} {devices}")
 
     # -- transformers 5 in ComfyUI's Python ---------------------------------
-    # pip cannot replace it (a resolver or disk error): the engine is not
-    # started, and nothing says ready
+    # the real PC's case: pip cannot downgrade it. The compatibility node is
+    # copied in instead, pip is never run, and the engine comes up ready.
     with Workspace() as ws:
         install = fake_install(ws / "app")
         py = fake_python(ws / "py", "5.19.0", pip_ok=False)
@@ -303,9 +303,36 @@ def run(slow: bool = False) -> Suite:
                     comfy_dir=str(install), python=str(py),
                     auto_start_comfy=False) as app:
             r = requests.post(f"{app.url}/api/comfy/start", timeout=60)
+            s.check("transformers 5 with a pip that fails: the engine starts "
+                    "anyway, with the compatibility node and no pip at all",
+                    r.status_code == 200
+                    and (install / "custom_nodes" / "avatar_studio_compat"
+                         / "__init__.py").exists()
+                    and not (ws / "py" / "pip.log").exists(), r.text[:300])
+            s.check("and it is ready, because the engine has loaded the node",
+                    wait_for(lambda: requests.get(f"{app.url}/api/status",
+                                                  timeout=20).json()["ready"],
+                             timeout=60))
+            deps = requests.get(f"{app.url}/api/deps", timeout=60).json()
+            tf = next((i for i in deps["items"] if i["id"] == "transformers"), {})
+            s.check("the Engine page lists transformers 5.19 as fine, with the "
+                    "node", tf.get("state") == "ok"
+                    and "compatibility node" in tf.get("detail", ""), str(tf))
+
+    # neither fix possible (custom_nodes not writable, pip failing): the
+    # engine is not started, and nothing says ready
+    with Workspace() as ws:
+        install = fake_install(ws / "app")
+        (install / "custom_nodes").write_text("not a folder")
+        py = fake_python(ws / "py", "5.19.0", pip_ok=False)
+        url = f"http://127.0.0.1:{free_port()}"
+        with studio(url, ws / "data", install / "models",
+                    comfy_dir=str(install), python=str(py),
+                    auto_start_comfy=False) as app:
+            r = requests.post(f"{app.url}/api/comfy/start", timeout=60)
             err = r.json().get("error", "")
-            s.check("a failed transformers install refuses to start the engine, "
-                    "and says why and how to fix it",
+            s.check("with no way to fix the lip sync, the engine is not "
+                    "started, and the answer says why and how",
                     r.status_code == 409 and "transformers 5.19.0" in err
                     and "transformers>=4.50.3,<5" in err, err)
             time.sleep(3)
@@ -314,25 +341,46 @@ def run(slow: bool = False) -> Suite:
                     not st["comfy_online"] and not st["ready"]
                     and st["transformers_bad"] == "5.19.0", str(st)[:200])
 
-    # an engine already running with ComfyUI-Manager: Restart must not use the
-    # Manager's in-place reboot (same packages); it stops it, pins, starts
+    # an engine already running with ComfyUI-Manager: the node goes on disk
+    # first, so the Manager's in-place reboot loads it; no pip
     with Workspace() as ws:
         install = fake_install(ws / "app")
-        py = fake_python(ws / "py", "5.19.0")
+        py = fake_python(ws / "py", "5.19.0", pip_ok=False)
         reboots = ws / "manager.log"
         with comfy(delay=0.2, MOCK_MANAGER_LOG=str(reboots)) as outside:
             with studio(outside.url, ws / "data", install / "models",
                         comfy_dir=str(install), python=str(py),
                         auto_start_comfy=False) as app:
                 st = requests.get(f"{app.url}/api/status", timeout=20).json()
-                s.check("an engine whose Python has transformers 5 is not "
-                        "ready, and the status says which version",
+                s.check("an engine with transformers 5 and without the node "
+                        "is not ready, and the status says which version",
                         st["comfy_online"] and not st["ready"]
                         and st["transformers_bad"] == "5.19.0", str(st)[:200])
                 r = requests.post(f"{app.url}/api/comfy/restart",
                                   timeout=120).json()
-                s.check("Restart skips the Manager reboot and takes the "
-                        "engine over",
+                s.check("Restart puts the node on disk, then lets "
+                        "ComfyUI-Manager reboot the engine to load it",
+                        r.get("how") == "manager-reboot" and reboots.exists()
+                        and (install / "custom_nodes" / "avatar_studio_compat"
+                             / "__init__.py").exists()
+                        and not (ws / "py" / "pip.log").exists(), str(r))
+
+    # the same, but the node cannot be written: the Manager reboot could not
+    # fix anything, so it is skipped; the engine is stopped, 4.x installed
+    # while nothing holds the files, and a managed engine started
+    with Workspace() as ws:
+        install = fake_install(ws / "app")
+        (install / "custom_nodes").write_text("not a folder")
+        py = fake_python(ws / "py", "5.19.0")
+        reboots = ws / "manager.log"
+        with comfy(delay=0.2, MOCK_MANAGER_LOG=str(reboots)) as outside:
+            with studio(outside.url, ws / "data", install / "models",
+                        comfy_dir=str(install), python=str(py),
+                        auto_start_comfy=False) as app:
+                r = requests.post(f"{app.url}/api/comfy/restart",
+                                  timeout=120).json()
+                s.check("without the node, Restart skips the Manager reboot "
+                        "and takes the engine over",
                         r.get("how") == "takeover" and not reboots.exists(),
                         str(r))
                 s.equal("4.x was installed before the new engine started",

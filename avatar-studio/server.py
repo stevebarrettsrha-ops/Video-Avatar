@@ -637,7 +637,8 @@ def api_status():
     # an engine that answers but whose Python has transformers 5 fails every
     # render in wav2vec2: not ready, and the page says why
     payload["transformers_bad"] = _transformers_bad(
-        bootstrap.comfy_python(cfg), cached=True)
+        bootstrap.comfy_python(cfg), cached=True,
+        live=client if online else None)
     if payload["transformers_bad"]:
         payload["transformers_fix"] = bootstrap.transformers_fix_command(
             bootstrap.comfy_python(cfg))
@@ -814,12 +815,21 @@ def _start_engine(py: str, port: int) -> str:
     return ""
 
 
-def _transformers_bad(py: str, cached: bool = False) -> str:
-    """The version, if ComfyUI's Python has a transformers that breaks wav2vec2."""
+def _transformers_bad(py: str, cached: bool = False, live=None) -> str:
+    """The version, if ComfyUI's Python has a transformers that breaks wav2vec2
+    and the fix is not there: with `live`, a running engine that has not
+    loaded the compatibility node; without, no node on disk."""
     if not py:
         return ""
     v = bootstrap.transformers_version(py, cached=cached)
-    return "" if bootstrap.transformers_ok(v) else v
+    if bootstrap.transformers_ok(v):
+        return ""
+    if live is not None:
+        try:
+            return "" if live.has(bootstrap.COMPAT_NODE) else v
+        except Exception:  # noqa: BLE001
+            return ""
+    return "" if bootstrap.compat_installed(cfg.get("comfy_dir")) else v
 
 
 @app.post("/api/comfy/start")
@@ -872,9 +882,12 @@ def api_comfy_restart():
         return jsonify({"ok": True, "how": "started"})
 
     # online, but not ours — take it over. ComfyUI-Manager's reboot restarts
-    # the same Python in place, so it cannot repair transformers: with 5.x,
-    # stop the process and start a managed one, which pins it first while
-    # nothing holds the files.
+    # the same Python in place: it loads the compatibility node if the node
+    # is on disk first, but cannot change packages. If the node cannot be
+    # put there and transformers is 5.x, stop the process and start a
+    # managed one, which installs 4.x first while nothing holds the files.
+    if can_start:
+        bootstrap.install_compat(cfg["comfy_dir"], _note)
     bad = _transformers_bad(py) if can_start else ""
     if bad:
         _note(f"transformers {bad} has to be replaced first — stopping the "
@@ -1332,9 +1345,11 @@ def ensure_engine_at_boot() -> None:
         reasons.append("a different install is answering the address")
     if cfg.get("lowvram", True) and bootstrap.engine_lowvram(stats) is False:
         reasons.append("it was started without low-VRAM mode (--lowvram)")
+    if _transformers_bad(py, live=client):
+        reasons.append("its transformers 5 breaks the lip sync, and it has not "
+                       "loaded the compatibility node")
+        bootstrap.install_compat(cfg["comfy_dir"], _note)
     bad = _transformers_bad(py)
-    if bad:
-        reasons.append(f"its transformers {bad} breaks the lip sync")
 
     if not reasons:
         _note(f"Adopting the ComfyUI already running at {url}.")

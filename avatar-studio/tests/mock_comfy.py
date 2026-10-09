@@ -34,6 +34,13 @@ OBJECT_INFO = json.loads(
     (pathlib.Path(__file__).with_name("object_info.json")).read_text())
 for cls in [c for c in os.environ.get("MOCK_OMIT", "").split(",") if c]:
     OBJECT_INFO.pop(cls, None)
+# custom nodes found at startup, as a real ComfyUI lists them (fake_install's
+# main.py sets this when custom_nodes/avatar_studio_compat is there)
+for cls in [c for c in os.environ.get("MOCK_EXTRA_NODES", "").split(",") if c]:
+    OBJECT_INFO[cls] = {"input": {"required": {}}, "input_order": {"required": []},
+                        "output": [], "output_name": [], "name": cls,
+                        "display_name": cls, "category": "Avatar Studio",
+                        "output_node": False}
 if os.environ.get("MOCK_NO_MELBAND_MODEL"):
     for _cls in ("MelBandRoFormerModelLoader", "WanVideoModelLoader"):
         if _cls in OBJECT_INFO:

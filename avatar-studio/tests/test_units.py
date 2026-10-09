@@ -332,6 +332,37 @@ def run(slow: bool = False) -> Suite:
     finally:
         bootstrap.transformers_version, bootstrap.pip_install = real_v, real_pip
 
+    # -- the compatibility node: the fix that needs no pip ------------------
+    import tempfile
+    import importlib.util
+    with tempfile.TemporaryDirectory() as tmp:
+        cdir = Path(tmp) / "ComfyUI"
+        cdir.mkdir()
+        s.check("no ComfyUI, no node", not bootstrap.install_compat(cdir))
+        (cdir / "main.py").write_text("")
+        s.check("the node is copied into custom_nodes",
+                bootstrap.install_compat(cdir)
+                and bootstrap.compat_installed(cdir))
+        dest = cdir / "custom_nodes" / bootstrap.COMPAT_NAME / "__init__.py"
+        dest.write_text("# an older copy")
+        s.check("an outdated copy is not counted, and is replaced",
+                bootstrap.install_compat(cdir) and dest.read_bytes()
+                == (bootstrap.COMPAT_SRC / "__init__.py").read_bytes())
+        real_v = bootstrap.transformers_version
+        try:
+            bootstrap.transformers_version = lambda py, cached=False: "5.19.0"
+            s.check("transformers 5 is fine with the node, not without",
+                    bootstrap.lipsync_ok("py", cdir)
+                    and not bootstrap.lipsync_ok("py", Path(tmp) / "other"))
+        finally:
+            bootstrap.transformers_version = real_v
+    spec = importlib.util.spec_from_file_location(
+        "avatar_studio_compat", bootstrap.COMPAT_SRC / "__init__.py")
+    shim = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(shim)
+    s.check("the node registers the marker the app looks for",
+            bootstrap.COMPAT_NODE in shim.NODE_CLASS_MAPPINGS)
+
     cl = comfy.ComfyClient("http://127.0.0.1:9")
     cl.history = lambda pid: {"status": {"status_str": "error", "messages": [
         ["execution_error", {"node_type": "MultiTalkWav2VecEmbeds",

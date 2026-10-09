@@ -1,17 +1,17 @@
 # Test report — LongCat Avatar Studio
 
-**Result: 298 of 298 checks pass, including 33 against a real ComfyUI.
+**Result: 307 of 307 checks pass, including 33 against a real ComfyUI.
 An out-of-the-box run from the shipped zip passes, and the error from the
 first real PC is reproduced and fixed on the real node.**
 
-Earlier result lines, kept for history: 290 of 290; 277 of 277; 270 of 270; 267 of 267 checks pass (`python tests/run.py`, 334 s with the real engine).
+Earlier result lines, kept for history: 298 of 298; 290 of 290; 277 of 277; 270 of 270; 267 of 267 checks pass (`python tests/run.py`, 334 s with the real engine).
 
 | Suite | Checks | What it proves |
 |---|---:|---|
 | gate | 5 | Every module compiles; the page's script parses; every id the script uses exists; every button, chip and slider has a listener; `run.sh` parses. |
-| units | 72 | Frame and window maths read from kijai's workflow file. The page's copy of the maths gives the same answers. The weight set and folders; the preflight verdicts; the RAM estimate; how ComfyUI is launched. |
+| units | 77 | Frame and window maths read from kijai's workflow file. The page's copy of the maths gives the same answers. The weight set and folders; the preflight verdicts; the RAM estimate; how ComfyUI is launched. |
 | graph | 73 | The graphs `comfy.py` builds, against the real node schema: window wiring, seams, audio routing, every setting, and the fallbacks for missing optional parts. |
-| api | 66 | The server end to end: uploads, validation, two-window renders with per-window progress, seeds, cancel, delete, the localhost guard, the preflight, the dependency list, a full set download, and stale or old engines. |
+| api | 70 | The server end to end: uploads, validation, two-window renders with per-window progress, seeds, cancel, delete, the localhost guard, the preflight, the dependency list, a full set download, and stale or old engines. |
 | stress | 20 | 400 fuzzed requests, 12 concurrent renders, parallel uploads and deletes, hostile paths, and damaged gallery/config files. |
 | ui | 29 | The page in Chromium: picture and speech, trimming, the plan line, the RAM warning, settings, generate, the lightbox, reuse, **recording from a (fake) microphone**, a draft surviving a reload, and every page. |
 | real | 33 | **A real ComfyUI 0.39** with the three node packs. Details below. |
@@ -126,6 +126,35 @@ Code review then found two gaps, and both are closed:
   command. `/api/status` stays not ready while ComfyUI's Python has 5.x, so
   an engine started some other way cannot pass as ready. Tested with a
   stand-in Python whose pip fails as a full disk would.
+
+### Then the downgrade itself failed on the real PC
+
+On the Windows PC, pip could not install transformers 4.x, and the app
+correctly refused to start the engine. A retry from the Engine page later
+went through, but a fix that depends on pip succeeding is fragile. So the
+app now carries the fix itself: `compat/avatar_studio_compat`, a ComfyUI
+custom node that puts the 4.x hidden states back on transformers 5. It
+records the input to each encoder layer, then the output, which is exactly
+the tuple 4.x returned.
+
+| Check | Result |
+|---|---|
+| wrapper's wav2vec2, transformers 5.19.0, no node | `hidden_states` None |
+| same, with the node | 13 states |
+| 13 states vs transformers 4.57.6, same weights and input | max difference **0.0** |
+| node on 4.57.6 | changes nothing (difference 0.0) |
+| real ComfyUI on 5.19.0, started by the app's `ComfyProcess.start` | node installed, **no pip call**, `AvatarStudioCompat` listed, `MultiTalkWav2VecEmbeds` **success** |
+
+The downgrade is now only the fallback, for when the node cannot be written
+into `custom_nodes`. The api suite covers four cases:
+
+1. pip failing, the node writable: the engine starts with no pip call and
+   is ready.
+2. Neither possible: the start is refused and nothing says ready.
+3. An engine started elsewhere, with ComfyUI-Manager: the node goes on disk
+   and then the Manager reboots it.
+4. The same, with the node not writable: the Manager reboot is skipped, 4.x
+   is installed and the engine ends up ready.
 
 ## Out of the box: the shipped zip, start to finish
 
