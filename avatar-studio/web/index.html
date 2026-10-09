@@ -579,7 +579,7 @@
     </div></div></div>
   <div class="orow"><span class="lab">Text encoder on</span><div class="ctl">
     <div class="chips" id="segT5">
-      <button class="on" data-v="cpu">CPU</button><button data-v="gpu">GPU</button>
+      <button data-v="cpu" title="bf16 on the CPU: minutes per new prompt">CPU</button><button class="on" data-v="gpu" title="fp8 on the GPU: seconds. Falls back to the CPU by itself if the card is too full.">GPU (fp8)</button>
     </div></div></div>
   <div class="orow"><span class="lab">Seed</span><div class="ctl">
     <input type="text" id="seed" placeholder="random each time" inputmode="numeric">
@@ -681,7 +681,7 @@ var S = {
   view: "create", size: "832x480", image: null, audio: null,
   status: null, jobs: [], images: [], libFilter: "", batch: 1,
   setupCursor: 0, taskId: null, taskCursor: 0, setupSeen: false, lightbox: null,
-  rec: null
+  rec: null, uploading: 0
 };
 function $(id) { return document.getElementById(id); }
 async function api(path, opts) {
@@ -792,7 +792,11 @@ function syncPlan() {
       (parts > 1 ? ', in <b id="partsNote">' + parts + " parts</b> joined into " +
         "one clip at the end" : "") +
       ". The frames need about <b>" + (ram / 1073741824).toFixed(1) +
-      " GB</b> of RAM" + (parts > 1 ? " — the same for any length" : "") + ".";
+      " GB</b> of RAM" + (parts > 1 ? " — the same for any length" : "") + "." +
+      (S.size === "1280x720" || S.size === "720x1280"
+        ? ' <span id="hdNote">720p has 2.3× the pixels of 480p, so each window ' +
+          "takes well over twice as long; on an 8 GB card start at 480p.</span>"
+        : "");
   }
   var cost = $("costNote");
   if (cost) {
@@ -830,7 +834,7 @@ function setSlider(row, value) {
 var draftReady = false;
 function saveDraft() {
   if (!draftReady) return;
-  var d = { v: 1, prompt: $("description").value, size: S.size,
+  var d = { v: 2, prompt: $("description").value, size: S.size,
     image: S.image ? { name: S.image.name } : null,
     audio: S.audio ? { name: S.audio.name, label: S.audio.label,
                        duration: S.audio.duration } : null,
@@ -854,7 +858,8 @@ function loadDraft() {
     SLIDERS.forEach(function (r) { if (d[r[0]] != null) setSlider(r, d[r[0]]); });
     if (d.quant) $("quant-sel").value = d.quant;
     if (d.attn) $("attn-sel").dataset.want = d.attn;
-    setSeg("segVoice", d.voice); setSeg("segTiled", d.tiled); setSeg("segT5", d.t5);
+    setSeg("segVoice", d.voice); setSeg("segTiled", d.tiled);
+    if (d.v >= 2) setSeg("segT5", d.t5);
     if (d.negative) $("neg-prompt").value = d.negative;
   }
   draftReady = true;
@@ -883,10 +888,21 @@ function setImage(name, url) {
   }
   saveDraft();
 }
+// While anything is uploading, Generate waits: pressed mid-upload it would
+// render the picture or speech that was there before, without a word.
+function syncBusy() {
+  var busy = S.uploading > 0;
+  $("btnGenerate").disabled = busy;
+  $("genLabel").textContent = busy ? "Uploading…"
+    : (S.status && !S.status.ready ? "Set up" : "Generate");
+}
 async function uploadFile(file, name) {
   var fd = new FormData();
   fd.append("file", file, name || file.name);
-  return (await api("/api/upload", { method: "POST", body: fd })).name;
+  S.uploading++; syncBusy();
+  try {
+    return (await api("/api/upload", { method: "POST", body: fd })).name;
+  } finally { S.uploading--; syncBusy(); }
 }
 async function pickImage(file) {
   if (!file) return;
@@ -937,6 +953,7 @@ function measure(file) {
 }
 async function pickAudio(file) {
   if (!file) return;
+  S.uploading++; syncBusy();            // measuring counts as uploading
   try {
     var duration = await measure(file);
     var name = await uploadFile(file);
@@ -945,6 +962,7 @@ async function pickAudio(file) {
     if (!duration) toast("Added. The browser could not measure it — press play " +
                          "once so its length is known.");
   } catch (e) { toast(e.message, true); }
+  finally { S.uploading--; syncBusy(); }
 }
 // A recording becomes a plain 16-bit WAV before it leaves the page: every
 // ComfyUI build reads WAV, not every one reads the browser's webm/opus.
@@ -1076,6 +1094,9 @@ function blockedFromRendering() {
     show("models");
     toast("Weights missing: " + st.missing_models.join(", ") +
           ". Download them here.", true);
+  } else if (st.transformers_bad) {
+    show("engine");
+    toast("transformers " + st.transformers_bad + " in ComfyUI's Python breaks the lip sync. Press Restart ComfyUI and it installs 4.x first, or press Install next to transformers below.", true);
   } else if (!st.nodes_ready) {
     show("engine");
     toast("ComfyUI is running without " + ((st.missing_nodes || []).join(", ")
@@ -1088,6 +1109,7 @@ function blockedFromRendering() {
   return true;
 }
 async function generate() {
+  if (S.uploading) { toast("Still uploading — Generate when it is done."); return; }
   if (!S.image) { show("create"); toast("Add a picture of the person first.", true); return; }
   if (!S.audio) { show("create"); toast("Add the speech — record it, or choose an audio file.", true); return; }
   if (!clipSeconds()) {
@@ -1511,7 +1533,9 @@ async function pollEngineLog() {
   }
   var st = S.status || {};
   var state;
-  if (st.stale_models && d.online) {
+  if (st.transformers_bad) {
+    state = "⚠ " + "transformers " + st.transformers_bad + " in ComfyUI's Python breaks the lip sync. Press Restart ComfyUI and it installs 4.x first, or press Install next to transformers below." + " By hand: " + (st.transformers_fix || "");
+  } else if (st.stale_models && d.online) {
     state = "⚠ The weights are on disk, but this ComfyUI started before "
           + "they landed and has not rescanned. Press Restart ComfyUI.";
   } else if (st.engine_mismatch && d.online) {
@@ -1865,10 +1889,12 @@ async function refreshStatus() {
     : st.ready ? "Engine ready"
     : !st.comfy_online ? "Engine offline"
     : !st.nodes_ready ? "Nodes missing"
+    : st.transformers_bad ? "Fix transformers"
     : (st.missing_models || []).length ? "Weights missing" : "Engine loading";
   $("modelsTag").hidden = !(st.missing_models && st.missing_models.length);
-  $("engineTag").hidden = !!(st.comfy_online && st.nodes_ready);
-  $("genLabel").textContent = st.ready ? "Generate" : "Set up";
+  $("engineTag").hidden = !!(st.comfy_online && st.nodes_ready
+                              && !st.transformers_bad);
+  syncBusy();
   if (st.attentions && st.attentions.length) {
     var a = $("attn-sel"), want = a.dataset.want || a.value || "sdpa";
     a.innerHTML = "";
@@ -1962,7 +1988,7 @@ function wire() {
     var prec = (S.status && S.status.config && S.status.config.precision) || "fp8";
     $("quant-sel").value = prec === "bf16" ? "disabled" : "fp8_e4m3fn";
     $("attn-sel").value = "sdpa";
-    setSeg("segVoice", "on"); setSeg("segTiled", "on"); setSeg("segT5", "cpu");
+    setSeg("segVoice", "on"); setSeg("segTiled", "on"); setSeg("segT5", "gpu");
     $("seed").value = "";
     $("neg-prompt").value = DEFAULT_NEGATIVE;
     syncPlan(); toast("Back to defaults.");

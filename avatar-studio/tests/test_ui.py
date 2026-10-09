@@ -16,6 +16,7 @@ import shutil
 import struct
 import sys
 import tempfile
+import time
 import wave
 from pathlib import Path
 
@@ -135,6 +136,11 @@ def run(slow: bool = False) -> Suite:
             s.check("an hour is allowed too",
                     "720 windows" in page.locator("#planNote").inner_text())
             page.evaluate("S.audio.duration = 7.5; syncPlan()")
+            page.click('#segSize button[data-v="1280x720"]')
+            s.check("720p warns that it is well over twice as slow",
+                    "start at 480p" in page.locator("#planNote").inner_text())
+            s.equal("the prompt is read on the GPU by default (5½ min on a real "
+                    "PC's CPU)", page.evaluate("segOn('segT5')"), "gpu")
             page.click('#segSize button[data-v="480x832"]')
             s.check("portrait is chosen",
                     "480×832" in page.locator("#planNote").inner_text())
@@ -147,6 +153,20 @@ def run(slow: bool = False) -> Suite:
                     page.locator("#stepsVal").inner_text(), "8")
             page.click('#segT5 button[data-v="gpu"]')
             page.click("#btnCloseSettings")
+
+            # -- an upload in flight holds Generate back --------------------
+            page.route("**/api/upload", lambda route: (time.sleep(1.5),
+                                                       route.continue_()))
+            page.locator("#audioFile").set_input_files(str(tmp / "speech.wav"))
+            page.wait_for_function("S.uploading > 0", timeout=5000)
+            s.check("while the speech uploads, Generate is held and says so",
+                    page.locator("#btnGenerate").is_disabled()
+                    and "Uploading" in page.locator("#genLabel").inner_text())
+            page.wait_for_function("S.uploading === 0", timeout=20000)
+            s.check("and comes back when it is done",
+                    page.locator("#btnGenerate").is_enabled()
+                    and page.locator("#genLabel").inner_text() == "Generate")
+            page.unroute("**/api/upload")
 
             # -- generate --------------------------------------------------
             page.fill("#description", "A woman talks to the camera.")

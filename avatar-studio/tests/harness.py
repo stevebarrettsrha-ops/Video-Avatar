@@ -177,6 +177,38 @@ def fake_install(root: Path, stale_first_boot: bool = False) -> Path:
     return install
 
 
+def fake_python(root: Path, transformers: str, pip_ok: bool = True) -> Path:
+    """A stand-in for ComfyUI's Python. It reports `transformers` to the
+    app's version probe, answers `-m pip install` by "installing" 4.57.6 (or
+    failing, with pip_ok False, as a resolver or disk error would), and runs
+    everything else — main.py — with the real interpreter. pip.log records
+    every pip call."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "transformers.version").write_text(transformers)
+    (root / "pip.ok").write_text("1" if pip_ok else "0")
+    script = root / "python"
+    script.write_text(textwrap.dedent(f"""\
+        #!{sys.executable}
+        import os, pathlib, sys
+        here = pathlib.Path({str(root)!r})
+        args = sys.argv[1:]
+        if args[:1] == ["-c"] and "importlib.metadata" in args[1]:
+            print((here / "transformers.version").read_text())
+            sys.exit(0)
+        if args[:2] == ["-m", "pip"]:
+            with open(here / "pip.log", "a") as fh:
+                fh.write(" ".join(args[2:]) + "\\n")
+            if (here / "pip.ok").read_text() != "1":
+                print("ERROR: No space left on device", flush=True)
+                sys.exit(1)
+            (here / "transformers.version").write_text("4.57.6")
+            sys.exit(0)
+        os.execv(sys.executable, [sys.executable] + args)
+    """))
+    script.chmod(0o755)
+    return script
+
+
 def supervised_comfy(delay: float = 1.0) -> Server:
     """A mock engine under a supervisor that respawns it when killed —
     ComfyUI Desktop and launcher scripts behave exactly like this."""

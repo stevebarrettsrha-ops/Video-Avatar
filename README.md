@@ -17,7 +17,7 @@ and walks you through setup.
 
 The [app README](avatar-studio/README.md) has the hardware notes. On an
 RTX 4060 (8 GB) with 32 GB of RAM it runs with fp8 weights, block swap and
-the text encoder on the CPU. Clips can be any length up to an hour. Long
+the text encoder on the GPU in fp8. Clips can be any length up to an hour. Long
 speech is rendered in parts and joined, so memory stays the same whatever
 the length. The download is about 42 GB, and a render takes minutes per
 5.8-second window; that timing hasn't been measured on real hardware yet.

@@ -167,6 +167,7 @@ def _torch_probe(python: str, code: str) -> tuple[int, str]:
 
 def forget_torch() -> None:
     _TORCH_SEEN.clear()
+    bootstrap.forget_transformers()
 
 
 # --------------------------------------------------------------------------- #
@@ -278,6 +279,19 @@ def dependencies(cfg: dict, client=None,
         items.append({"id": "torch", "label": "PyTorch", "state": "unknown",
                       "detail": "Install ComfyUI first.", "action": "install"})
 
+    if py_comfy:
+        tv = bootstrap.transformers_version(py_comfy)
+        if tv and not bootstrap.transformers_ok(tv):
+            items.append({"id": "transformers", "label": "transformers",
+                          "state": "warn",
+                          "detail": f"{tv} — 5.x breaks the lip sync "
+                                    "(wav2vec2 returns nothing). Install puts "
+                                    "4.x back; then restart the engine.",
+                          "action": "install"})
+        elif tv:
+            items.append({"id": "transformers", "label": "transformers",
+                          "state": "ok", "detail": tv})
+
     models_dir = Path(cfg["models_dir"]) if cfg.get("models_dir") else None
     if models_dir and models_dir.is_dir():
         missing = bootstrap.missing_models(models_dir, cfg)
@@ -324,7 +338,7 @@ def install_dependency(dep_id: str, cfg: dict, opts: dict) -> Task:
         if not node:
             raise RuntimeError(f"Unknown node '{dep_id}'.")
     titles = {"git": "Install Git", "comfyui": "Install ComfyUI",
-              "torch": "Install PyTorch"}
+              "torch": "Install PyTorch", "transformers": "transformers 4.x"}
     title = node["label"] if node else titles.get(dep_id, dep_id)
 
     def run(task: Task) -> None:
@@ -335,6 +349,13 @@ def install_dependency(dep_id: str, cfg: dict, opts: dict) -> Task:
                 _install_comfyui(task, cfg)
             elif dep_id == "torch":
                 _install_torch(task, cfg, opts)
+            elif dep_id == "transformers":
+                py = comfy_python(cfg)
+                if not py:
+                    raise RuntimeError("Install ComfyUI first.")
+                bootstrap.pin_transformers(py, task.log,
+                                           should_cancel=lambda: task.cancel)
+                task.set(detail="Done. Restart ComfyUI so it loads 4.x.")
             elif node:
                 _install_node(task, cfg, node)
             else:
@@ -396,6 +417,8 @@ def _install_node(task: Task, cfg: dict, node: dict) -> None:
         task.set(detail="Installing its requirements…")
         bootstrap.pip_install(py, ["-r", str(reqs)], task.log,
                               should_cancel=lambda: task.cancel)
+        bootstrap.pin_transformers(py, task.log,
+                                   should_cancel=lambda: task.cancel)
     task.set(detail="Installed. Restart ComfyUI so it loads the node.")
 
 
@@ -434,6 +457,8 @@ def _install_torch(task: Task, cfg: dict, opts: dict) -> None:
     bootstrap.pip_install(str(target),
                           ["-r", str(comfy_dir / "requirements.txt")], task.log,
                           should_cancel=lambda: task.cancel)
+    bootstrap.pin_transformers(str(target), task.log,
+                               should_cancel=lambda: task.cancel)
     task.set(detail="PyTorch installed.")
 
 

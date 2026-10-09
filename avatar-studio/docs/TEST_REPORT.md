@@ -1,15 +1,19 @@
 # Test report — LongCat Avatar Studio
 
-**Result: 267 of 267 checks pass** (`python tests/run.py`, 334 s with the real engine).
+**Result: 298 of 298 checks pass, including 33 against a real ComfyUI.
+An out-of-the-box run from the shipped zip passes, and the error from the
+first real PC is reproduced and fixed on the real node.**
+
+Earlier result lines, kept for history: 290 of 290; 277 of 277; 270 of 270; 267 of 267 checks pass (`python tests/run.py`, 334 s with the real engine).
 
 | Suite | Checks | What it proves |
 |---|---:|---|
 | gate | 5 | Every module compiles; the page's script parses; every id the script uses exists; every button, chip and slider has a listener; `run.sh` parses. |
-| units | 52 | Frame and window maths read from kijai's workflow file. The page's copy of the maths gives the same answers. The weight set and folders; the preflight verdicts; the RAM estimate; how ComfyUI is launched. |
+| units | 72 | Frame and window maths read from kijai's workflow file. The page's copy of the maths gives the same answers. The weight set and folders; the preflight verdicts; the RAM estimate; how ComfyUI is launched. |
 | graph | 73 | The graphs `comfy.py` builds, against the real node schema: window wiring, seams, audio routing, every setting, and the fallbacks for missing optional parts. |
-| api | 59 | The server end to end: uploads, validation, two-window renders with per-window progress, seeds, cancel, delete, the localhost guard, the preflight, the dependency list, a full set download, and stale or old engines. |
+| api | 66 | The server end to end: uploads, validation, two-window renders with per-window progress, seeds, cancel, delete, the localhost guard, the preflight, the dependency list, a full set download, and stale or old engines. |
 | stress | 20 | 400 fuzzed requests, 12 concurrent renders, parallel uploads and deletes, hostile paths, and damaged gallery/config files. |
-| ui | 25 | The page in Chromium: picture and speech, trimming, the plan line, the RAM warning, settings, generate, the lightbox, reuse, **recording from a (fake) microphone**, a draft surviving a reload, and every page. |
+| ui | 29 | The page in Chromium: picture and speech, trimming, the plan line, the RAM warning, settings, generate, the lightbox, reuse, **recording from a (fake) microphone**, a draft surviving a reload, and every page. |
 | real | 33 | **A real ComfyUI 0.39** with the three node packs. Details below. |
 
 ## Against a real ComfyUI
@@ -73,6 +77,95 @@ install updated it in place in 13 seconds.
    in parts and joined, with no length limit.
 7. **The empty-feed message was split across grid columns**, and the Seed
    row read "Random / Random". Both are fixed.
+
+## The first real PC (RTX 4060, 8 GB, 32 GB RAM, Windows)
+
+A 2.8 s recording at 720p hit two problems.
+
+1. **Reading the prompt took 5½ minutes.** The console showed umT5 running
+   its 24 layers on the CPU in bf16, at about 14 s a layer. The text encoder
+   now goes to the GPU in fp8 by default, about 6.7 GB, while the DiT is
+   still in RAM. That takes seconds, and the result is cached on disk per
+   prompt as before. If the card is too full (CUDA OOM in that node), the
+   render retries once on the CPU by itself. The api suite drives that
+   retry, and the graph, units and ui suites check the defaults. The plan
+   line now says 720p takes well over twice as long as 480p.
+2. **Then every render failed:** `MultiTalkWav2VecEmbeds: 'NoneType' object
+   is not subscriptable`. The cause is transformers 5. The wrapper's
+   wav2vec2 subclass asks the encoder for `output_hidden_states`, and from
+   5.0 the encoder ignores it. Reproduced on the real ComfyUI from the
+   out-of-the-box run, running the real node on a randomly initialised
+   wav2vec2 file:
+
+   | transformers | MultiTalkWav2VecEmbeds |
+   |---|---|
+   | 5.19.0 (what ComfyUI's `>=4.50.3` installs) | **error: 'NoneType' object is not subscriptable** |
+   | 4.57.6 | success (13 hidden states) |
+
+   The app now keeps transformers below 5 in ComfyUI's Python. It asks for
+   diffusers in the same install, because the newest diffusers needs
+   huggingface-hub 1.32 or later and transformers 4 needs below 1.0. pip
+   settles on diffusers 0.39, and `pip check` is clean. The fix runs after
+   setup, after node and PyTorch installs, and before every engine start.
+   Verified from a clean 5.19: the app's own `ComfyProcess.start` installed
+   4.57.6, ComfyUI loaded every pack, and the node succeeded.
+
+Code review then found two gaps, and both are closed:
+
+- **Restart on an engine started elsewhere** went through ComfyUI-Manager's
+  in-place reboot, which restarts the same packages, so transformers stayed
+  5.x. When the configured Python has 5.x, Restart now stops the process
+  instead and starts a managed engine, which installs 4.x first, while
+  nothing holds the files. (On Windows a running ComfyUI holds tokenizers'
+  `.pyd`, so pip cannot replace it in place.) The api suite drives this
+  against a mock engine with a Manager reboot endpoint. The reboot is never
+  called, 4.x is in place before the new engine starts, and then it is
+  ready.
+- **A failed install only logged a line and started ComfyUI anyway.** It now
+  starts nothing, and the start answers with the reason and the exact pip
+  command. `/api/status` stays not ready while ComfyUI's Python has 5.x, so
+  an engine started some other way cannot pass as ready. Tested with a
+  stand-in Python whose pip fails as a full disk would.
+
+## Out of the box: the shipped zip, start to finish
+
+`tests/out_of_the_box.py` does what a new user does, on a clean folder:
+
+1. Unzip `LongCat-Avatar-Studio.zip`.
+2. Run its own `run.sh`. It creates `.venv` and installs the requirements;
+   the app answered in 8 s.
+3. Click **Install a fresh ComfyUI** on the setup sheet. Every step went
+   green in 3 min 6 s: ComfyUI, the four node packs, `comfy-venv` with
+   PyTorch and all requirements, the six weight files, and ComfyUI started.
+   The engine pill read **Engine ready**.
+4. Through the page, render a 12.5 s clip and a 40 s clip. The files, as
+   ffprobe sees them:
+
+| Clip | Parts | Frames | fps | Size | Audio |
+|---|---|---|---|---|---|
+| 12.5 s | 2 | 200 (200 expected) | 16 | 832×480 | 12.500 s |
+| 40 s | 4 | 640 (640 expected) | 16 | 832×480 | 40.000 s |
+
+There were no script errors on the page, and the result was **OUT-OF-THE-BOX
+RUN PASSED** (log: `docs/out-of-the-box-run.log`, screenshots:
+`docs/screenshots/out-of-the-box/`).
+
+Four stand-ins were used because this sandbox has no internet route to
+them and no GPU:
+
+- a stand-in HuggingFace (`tests/mock_hf.py`);
+- PyTorch from PyPI instead of download.pytorch.org;
+- ComfyUI with `--cpu`;
+- stand-in frames in place of the model (`AVATAR_REHEARSAL=1`).
+
+On a real machine all four are dropped.
+
+The first attempt found one more bug. **Pressing Generate while a new audio
+file was still uploading rendered the previous audio**, without saying so.
+Generate is now held ("Uploading…") until every upload has finished, and
+the browser test covers it. A progress line that showed a raw node name
+("GetVideoComponents") now reads "Picking up from the part before". A unit
+check now makes sure every node the app queues has a stage in words.
 
 ## No length limit: long clips in parts
 

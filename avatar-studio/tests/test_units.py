@@ -216,6 +216,14 @@ def run(slow: bool = False) -> Suite:
             {k: v["quantization"] for k, v in bootstrap.PRECISIONS.items()},
             {"fp8": "fp8_e4m3fn", "bf16": "disabled"})
 
+    # -- every node the graphs use has a stage in words ----------------------
+    import server
+    import json as _json
+    used = set(_json.loads((ROOT / "tests" / "object_info.json").read_text()))
+    raw = sorted(c for c in used if server.stage_for(c) == c)
+    s.equal("every node the app queues shows as a stage in words, never its "
+            "class name", raw, [])
+
     # -- launching the engine ----------------------------------------------
     import os
     import tempfile
@@ -272,6 +280,66 @@ def run(slow: bool = False) -> Suite:
                                 precision="bf16")
     s.check("bf16 on a small card says to use fp8",
             any("fp8 is the setting" in n for n in notes))
+
+    # -- transformers 5 breaks the lip sync: kept under 5 --------------------
+    s.check("transformers 4.x and none at all pass, 5.x does not",
+            bootstrap.transformers_ok("4.57.6") and bootstrap.transformers_ok("")
+            and not bootstrap.transformers_ok("5.19.0")
+            and not bootstrap.transformers_ok("5.0.0"))
+    calls: list = []
+    real_v, real_pip = bootstrap.transformers_version, bootstrap.pip_install
+    try:
+        bootstrap.pip_install = lambda py, args, log, *a, **k: calls.append(args)
+        versions = iter(["5.19.0", "4.57.6"])     # before, after the install
+        bootstrap.transformers_version = lambda py, cached=False: next(versions)
+        changed = bootstrap.pin_transformers("py", lambda m: None)
+        s.check("5.19 is replaced with 4.x", changed and calls == [
+            bootstrap.PIN_ARGS] and "<5" in bootstrap.TRANSFORMERS_PIN
+            and any(a.startswith("diffusers") for a in bootstrap.PIN_ARGS),
+            str(calls))
+        calls.clear()
+        versions = iter(["4.57.6"])
+        bootstrap.transformers_version = lambda py, cached=False: next(versions)
+        s.check("4.57 is left alone",
+                not bootstrap.pin_transformers("py", lambda m: None)
+                and not calls)
+        # pip "succeeded" but 5.x is still there: not a quiet success
+        bootstrap.transformers_version = lambda py, cached=False: "5.19.0"
+        try:
+            bootstrap.pin_transformers("py", lambda m: None)
+            raised = ""
+        except RuntimeError as exc:
+            raised = str(exc)
+        s.check("an install that leaves 5.x behind raises", "5.19.0" in raised,
+                raised)
+
+        # and the engine is not started on it
+        def broken_pip(*a, **k):
+            raise RuntimeError("pip exited with 1")
+        bootstrap.pip_install = broken_pip
+        cp = bootstrap.ComfyProcess()
+        try:
+            cp.start("/nonexistent/python", Path("/nonexistent/ComfyUI"), 8188,
+                     bootstrap.Progress())
+            outcome = "started"
+        except bootstrap.TransformersBlocked as exc:
+            outcome = str(exc)
+        except Exception as exc:  # noqa: BLE001
+            outcome = f"launched anyway: {type(exc).__name__}"
+        s.check("a failed pin stops the engine from starting, and says how "
+                "to fix it", cp.proc is None and "not started" in outcome
+                and "transformers>=4.50.3,<5" in outcome, outcome)
+    finally:
+        bootstrap.transformers_version, bootstrap.pip_install = real_v, real_pip
+
+    cl = comfy.ComfyClient("http://127.0.0.1:9")
+    cl.history = lambda pid: {"status": {"status_str": "error", "messages": [
+        ["execution_error", {"node_type": "MultiTalkWav2VecEmbeds",
+                             "exception_message":
+                             "'NoneType' object is not subscriptable"}]]}}
+    msg = cl.failed("x") or ""
+    s.check("the error a real PC hit says what it is and how to fix it",
+            "transformers 5" in msg and "transformers<5" in msg, msg)
 
     # -- a moved app folder: stale saved paths are found again ---------------
     import tempfile

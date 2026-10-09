@@ -178,7 +178,16 @@ def _execute(pid, graph):
         time.sleep(DELAY)
     with LOCK:
         interrupted = pid in INTERRUPTS
-    if os.environ.get("MOCK_FAIL_AFTER"):
+    t5_gpu = any(n["class_type"] == "WanVideoTextEncodeCached"
+                 and n["inputs"].get("device") == "gpu" for n in graph.values())
+    if os.environ.get("MOCK_T5_OOM") and t5_gpu:
+        # the card too full for umT5 in fp8, as a CUDA OOM in that node
+        status = {"status_str": "error", "messages": [
+            ["execution_error", {"node_type": "WanVideoTextEncodeCached",
+                                 "exception_message":
+                                 "CUDA out of memory. Tried to allocate 1.96 GiB"}]]}
+        outputs = {}
+    elif os.environ.get("MOCK_FAIL_AFTER"):
         status = {"status_str": "error", "messages": [
             ["execution_error", {"node_type": "WanVideoSamplerv2",
                                  "exception_message": "CUDA out of memory"}]]}
@@ -394,6 +403,13 @@ class H(BaseHTTPRequestHandler):
         p = self.path.split("?")[0]
         n = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(n) if n else b""
+        if p == "/manager/reboot":
+            # ComfyUI-Manager's in-place reboot: same Python, same packages
+            with open(os.environ.get("MOCK_MANAGER_LOG", os.devnull), "a") as fh:
+                fh.write("reboot\n")
+            self._send(200, {})
+            threading.Timer(0.3, lambda: os._exit(0)).start()
+            return
         if p == "/prompt":
             graph = json.loads(raw)["prompt"]
             bad = validate(graph)
