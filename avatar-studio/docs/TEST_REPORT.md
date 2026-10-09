@@ -1,15 +1,15 @@
 # Test report — LongCat Avatar Studio
 
-**Result: 277 of 277 checks pass, including 33 against a real ComfyUI.
+**Result: 290 of 290 checks pass, including 33 against a real ComfyUI.
 An out-of-the-box run from the shipped zip passes, and the error from the
 first real PC is reproduced and fixed on the real node.**
 
-Earlier result lines, kept for history: 270 of 270; 267 of 267 checks pass (`python tests/run.py`, 334 s with the real engine).
+Earlier result lines, kept for history: 277 of 277; 270 of 270; 267 of 267 checks pass (`python tests/run.py`, 334 s with the real engine).
 
 | Suite | Checks | What it proves |
 |---|---:|---|
 | gate | 5 | Every module compiles; the page's script parses; every id the script uses exists; every button, chip and slider has a listener; `run.sh` parses. |
-| units | 57 | Frame and window maths read from kijai's workflow file. The page's copy of the maths gives the same answers. The weight set and folders; the preflight verdicts; the RAM estimate; how ComfyUI is launched. |
+| units | 70 | Frame and window maths read from kijai's workflow file. The page's copy of the maths gives the same answers. The weight set and folders; the preflight verdicts; the RAM estimate; how ComfyUI is launched. |
 | graph | 73 | The graphs `comfy.py` builds, against the real node schema: window wiring, seams, audio routing, every setting, and the fallbacks for missing optional parts. |
 | api | 60 | The server end to end: uploads, validation, two-window renders with per-window progress, seeds, cancel, delete, the localhost guard, the preflight, the dependency list, a full set download, and stale or old engines. |
 | stress | 20 | 400 fuzzed requests, 12 concurrent renders, parallel uploads and deletes, hostile paths, and damaged gallery/config files. |

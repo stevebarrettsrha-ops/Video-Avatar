@@ -324,6 +324,7 @@ def run(slow: bool = False) -> Suite:
         with Server([sys.executable, "server.py"], aport, "/api/status",
                     env={"AVATAR_STUDIO_PORT": str(aport),
                          "AVATAR_STUDIO_NO_BROWSER": "1",
+                         "AVATAR_STUDIO_NO_SEARCH": "1",
                          "AVATAR_STUDIO_DATA": str(data),
                          "AVATAR_REHEARSAL": "1"}) as app:
             peaks = {}

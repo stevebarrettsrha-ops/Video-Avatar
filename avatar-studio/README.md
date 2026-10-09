@@ -180,7 +180,7 @@ AVATAR_REAL_COMFY=http://127.0.0.1:8188 AVATAR_REAL_MODELS=/path/ComfyUI/models 
     python tests/run.py real   # against a real ComfyUI with the three packs
 ```
 
-**277 checks**, all passing, plus an out-of-the-box run from the zip (`tests/out_of_the_box.py`). See [docs/TEST_REPORT.md](docs/TEST_REPORT.md)
+**290 checks**, all passing, plus an out-of-the-box run from the zip (`tests/out_of_the_box.py`). See [docs/TEST_REPORT.md](docs/TEST_REPORT.md)
 for what each suite proves and the bugs the testing found, and
 [docs/screenshots/](docs/screenshots/) for every screen.
 
