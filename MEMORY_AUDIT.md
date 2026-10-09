@@ -26,9 +26,11 @@
 
 ## Validation
 
-Gate, units, new memory reproducer, graph, API and stress suites:
-**260 checks passed; 3 process-takeover checks failed in this runner**.
+Second-pass gate, units, memory, graph, API and stress suites:
+**278 checks passed; 3 process-takeover checks failed in this runner**.
 The same three also failed when the API suite was run on unchanged `main`.
+On clean GitHub runners, **all 281 checks passed on Python 3.10 and 3.13**,
+including the process-takeover checks ([run 37993778113](https://github.com/stevebarrettsrha-ops/Video-Avatar/actions/runs/37993778113)).
 The second-pass gate, unit, memory and graph suites passed **186 checks**,
 including **28 memory checks** and all 74 graph checks. Tests reproduce the
 old GPU allocation in CPU mode, execute the repaired call, and verify CPU/GPU
