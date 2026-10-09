@@ -121,8 +121,8 @@ MELBAND = {"name": "MelBandRoformer_fp32.safetensors", "repo": MELBAND_REPO,
 PRECISIONS = {
     "fp8": {"label": "fp8 in memory — for 8–16 GB cards",
             "note": "The bf16 file, stored as fp8_e4m3fn as it loads: about "
-                    "14 GB resident instead of 28. What makes 32 GB of RAM "
-                    "enough.",
+                    "14 GB for the DiT instead of 28. CPU text encoding can "
+                    "coexist with it; 32 GB of RAM remains tight.",
             "quantization": "fp8_e4m3fn"},
     "bf16": {"label": "bf16 — full precision, 24 GB+ cards",
              "note": "About 28 GB resident. Wants 64 GB of system RAM unless "
@@ -391,13 +391,13 @@ def assess(vram: int, ram: int, free_disk: int, download: int,
     if ram and peak and ram < peak * 0.7:
         worse("hard")
         notes.append(f"{ram/GIB:.0f} GB of system RAM against a "
-                     f"{peak/1e9:.0f} GB peak — the DiT as it sits in "
-                     "memory, plus the audio models and the VAE. That is not "
-                     "enough to page through; expect out-of-memory stops.")
+                     f"{peak/1e9:.0f} GB model-weight estimate — the cached DiT, "
+                     "CPU text encoder, audio models and VAE. That is not "
+                     "enough for the weights; expect out-of-memory stops.")
     elif ram and peak and ram < peak * 1.15:
         worse("tight")
         notes.append(f"{ram/GIB:.0f} GB of system RAM against a "
-                     f"{peak/1e9:.0f} GB peak — close the browser tabs and "
+                     f"{peak/1e9:.0f} GB model-weight estimate — close browser tabs and "
                      "apps you can while a clip renders; a fast SSD for the "
                      "page file matters.")
     if free_disk and download and free_disk < download * 1.1:
@@ -426,13 +426,17 @@ def preflight(cfg: dict) -> dict:
     download = sum(i["size"] for i in items)
     precision = cfg.get("precision") or "fp8"
     dit = DIT["size"] // 2 if precision == "fp8" else DIT["size"]
-    # the text encoder loads, encodes and unloads before the DiT is needed;
-    # what is resident together is the DiT and the small models
+    # ComfyUI keeps the DiT cached between parts and takes. On a changed
+    # prompt, CPU T5 fallback can therefore coexist with it. This estimates
+    # weights only: frames, activations, loading copies and the OS need more.
     small = VAE["size"] + WAV2VEC["size"] + MELBAND["size"] + DISTILL_LORA["size"]
-    peak = max(dit, TEXT_ENCODER["size"]) + small
+    peak = dit + TEXT_ENCODER["size"] + small
 
     verdict, notes = assess(vram, ram, free_disk, download, peak,
                             cfg.get("lowvram", True), precision)
+    notes.append("The model-weight estimate allows CPU text encoding alongside "
+                 "the cached video model. It excludes frames, activations, "
+                 "loading copies and the OS; it is not a measured RAM peak.")
     return {"vram": vram, "gpu": gpu, "ram": ram, "free_disk": free_disk,
             "download": download, "peak": peak, "verdict": verdict,
             "notes": notes, "precision": precision}
@@ -1538,25 +1542,24 @@ def compat_installed(comfy_dir) -> bool:
         return False
 
 
-def fix_t5_cpu_loading(comfy_dir, log=None) -> bool:
-    """Repair the known wrapper call that loads T5 on CUDA in CPU mode.
-
-    Only replace that call's literal third argument, located with the AST.
-    Keep the original alongside it; never rewrite unfamiliar upstream code.
-    This must run before ComfyUI imports the wrapper (restart an old engine).
-    """
+def _t5_cpu_source(raw: bytes) -> bytes | None:
+    """Return the exact known repair, or None for an unfamiliar wrapper."""
     import ast
-    import hashlib
-    path = Path(comfy_dir) / "custom_nodes" / "ComfyUI-WanVideoWrapper" / "nodes.py"
-    if not path.is_file():
-        return False
-    try:
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source)
-        for cls in tree.body:
-            if not isinstance(cls, ast.ClassDef) or cls.name != "WanVideoTextEncodeCached":
+    source = raw.decode("utf-8")
+    tree = ast.parse(source)
+    replacement = '"offload_device" if device == "cpu" else "main_device"'
+    for cls in tree.body:
+        if not isinstance(cls, ast.ClassDef) or cls.name != "WanVideoTextEncodeCached":
+            continue
+        for method in cls.body:
+            if not isinstance(method, ast.FunctionDef) or method.name != "process":
                 continue
-            for call in ast.walk(cls):
+            # A similar call in a future method without this argument must
+            # not gain a reference to an undefined variable.
+            args = method.args.posonlyargs + method.args.args + method.args.kwonlyargs
+            if not any(arg.arg == "device" for arg in args):
+                continue
+            for call in ast.walk(method):
                 if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
                         and call.func.attr == "loadmodel" and len(call.args) >= 3
                         and isinstance(call.func.value, ast.Call)
@@ -1564,35 +1567,88 @@ def fix_t5_cpu_loading(comfy_dir, log=None) -> bool:
                         and call.func.value.func.id == "LoadWanVideoT5TextEncoder"):
                     continue
                 arg = call.args[2]
-                replacement = '"offload_device" if device == "cpu" else "main_device"'
                 if ast.dump(arg) == ast.dump(ast.parse(replacement, mode="eval").body):
-                    return True
+                    return raw
                 if not isinstance(arg, ast.Constant) or arg.value != "main_device":
                     continue
                 # AST columns are UTF-8 byte offsets, not character offsets.
-                rows = source.encode("utf-8").splitlines(keepends=True)
+                # Read bytes so backups and comparisons preserve CRLF too.
+                rows = raw.splitlines(keepends=True)
                 start = sum(map(len, rows[:arg.lineno - 1])) + arg.col_offset
                 end = sum(map(len, rows[:arg.end_lineno - 1])) + arg.end_col_offset
-                raw = source.encode("utf-8")
                 fixed = raw[:start] + replacement.encode() + raw[end:]
-                compile(fixed, str(path), "exec")
-                digest = hashlib.sha256(raw).hexdigest()[:12]
-                backup = path.with_suffix(f".py.avatar-studio-original-{digest}")
-                if not backup.exists():
-                    backup.write_bytes(raw)
-                temp = path.with_suffix(".py.avatar-studio-tmp")
-                temp.write_bytes(fixed)
-                temp.replace(path)
-                if log:
-                    log("Fixed CPU text encoding: T5 now loads off the GPU. "
-                        "The original wrapper file is saved beside nodes.py.")
-                return True
+                compile(fixed, "WanVideoWrapper/nodes.py", "exec")
+                return fixed
+    return None
+
+
+def _replace_wrapper_source(path: Path, source: bytes) -> None:
+    temp = path.with_suffix(".py.avatar-studio-tmp")
+    temp.write_bytes(source)
+    temp.replace(path)
+
+
+def fix_t5_cpu_loading(comfy_dir, log=None) -> bool:
+    """Repair the known wrapper call that loads T5 on CUDA in CPU mode.
+
+    Only replace that call's literal third argument, located with the AST.
+    Keep the original alongside it; never rewrite unfamiliar upstream code.
+    This must run before ComfyUI imports the wrapper (restart an old engine).
+    """
+    import hashlib
+    path = Path(comfy_dir) / "custom_nodes" / "ComfyUI-WanVideoWrapper" / "nodes.py"
+    if not path.is_file():
+        return False
+    try:
+        raw = path.read_bytes()
+        fixed = _t5_cpu_source(raw)
+        if fixed == raw:
+            return True
+        if fixed is not None:
+            digest = hashlib.sha256(raw).hexdigest()[:12]
+            backup = path.with_suffix(f".py.avatar-studio-original-{digest}")
+            if not backup.exists():
+                backup.write_bytes(raw)
+            _replace_wrapper_source(path, fixed)
+            if log:
+                log("Fixed CPU text encoding: T5 now loads off the GPU. "
+                    "The original wrapper file is saved beside nodes.py.")
+            return True
         if log:
             log("T5 CPU-load fix: wrapper code differs; left it unchanged. "
                 "CPU fallback has not been verified for this version.")
-    except (OSError, SyntaxError, ValueError) as exc:
+    except (OSError, SyntaxError, ValueError, UnicodeError) as exc:
         if log:
             log(f"Could not apply the T5 CPU-load fix: {exc}")
+    return False
+
+
+def restore_t5_cpu_loading(comfy_dir, log=None) -> bool:
+    """Undo only our exact change before updating the wrapper checkout.
+
+    A backup must match its hash and reproduce every current byte after the
+    repair. Additional user edits are never discarded to make a pull work.
+    """
+    import hashlib
+    path = Path(comfy_dir) / "custom_nodes" / "ComfyUI-WanVideoWrapper" / "nodes.py"
+    if not path.is_file():
+        return False
+    try:
+        current = path.read_bytes()
+        for backup in sorted(path.parent.glob("nodes.py.avatar-studio-original-*")):
+            original = backup.read_bytes()
+            digest = hashlib.sha256(original).hexdigest()[:12]
+            if backup.name != f"nodes.py.avatar-studio-original-{digest}":
+                continue
+            if original != current and _t5_cpu_source(original) == current:
+                _replace_wrapper_source(path, original)
+                if log:
+                    log("Temporarily restored the wrapper's original T5 call "
+                        "for its update; the CPU fix will be reapplied afterward.")
+                return True
+    except (OSError, SyntaxError, ValueError, UnicodeError) as exc:
+        if log:
+            log(f"Could not prepare the T5 CPU-load fix for update: {exc}")
     return False
 
 
@@ -1651,8 +1707,20 @@ def clone_node(node: dict, comfy_dir: Path, log, on_pct=None) -> Path:
     target = comfy_dir / "custom_nodes" / node["dir"]
     if target.exists():
         log(f"Updating {node['label']}")
-        git_run(["git", "-C", str(target), "pull", "--ff-only", "--progress"],
+        # Our source repair otherwise makes an upstream nodes.py update
+        # fail as a dirty checkout. Undo it only when no user edits followed.
+        repaired = (node["dir"] == "ComfyUI-WanVideoWrapper"
+                    and (target / ".git").exists()
+                    and restore_t5_cpu_loading(comfy_dir, log))
+        try:
+            code, out = git_run(
+                ["git", "-C", str(target), "pull", "--ff-only", "--progress"],
                 log, on_pct)
+            if code:
+                raise RuntimeError(f"Could not update {node['label']}: {out[-600:]}")
+        finally:
+            if repaired:
+                fix_t5_cpu_loading(comfy_dir, log)
         return target
     target.parent.mkdir(parents=True, exist_ok=True)
     urls = [node["repo"]] + ([node["fallback"]] if node.get("fallback") else [])

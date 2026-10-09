@@ -37,7 +37,10 @@ ones before it downloads. Every link is in
 They do not establish that a complete render fits that hardware:
 
 - **fp8 in memory.** The bf16 file is stored as fp8 as it loads: about
-  14 GB resident instead of 28. This is what makes 32 GB of RAM enough.
+  14 GB for the DiT instead of 28. A cached DiT can coexist with the
+  11 GB CPU text encoder on a later prompt. Allow additional RAM for the
+  VAE, audio models, frames, loading copies and the operating system;
+  32 GB is a tight starting point, not a guarantee.
 - **Block swap 40 of 48.** Most of the DiT stays in system RAM and visits
   the GPU a block at a time. Block prefetch defaults to zero, leaving more
   space for activations instead of keeping an extra block on the card.
@@ -198,9 +201,10 @@ AVATAR_REAL_COMFY=http://127.0.0.1:8188 AVATAR_REAL_MODELS=/path/ComfyUI/models 
     python tests/run.py real   # against a real ComfyUI with the three packs
 ```
 
-**314 checks**, all passing, plus an out-of-the-box run from the zip (`tests/out_of_the_box.py`). See [docs/TEST_REPORT.md](docs/TEST_REPORT.md)
-for what each suite proves and the bugs the testing found, and
-[docs/screenshots/](docs/screenshots/) for every screen.
+The historical [test report](docs/TEST_REPORT.md) records 314 passing checks
+and an out-of-the-box ZIP run. For the current memory fixes, validation
+results and remaining hardware limitations, see [MEMORY_AUDIT.md](../MEMORY_AUDIT.md).
+See [docs/screenshots/](docs/screenshots/) for every screen.
 
 `tests/object_info.json` is not guessed. It is the real `/object_info` of
 ComfyUI 0.39 with the three node packs loaded, cut down to the nodes this

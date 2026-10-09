@@ -18,8 +18,8 @@ and walks you through setup.
 The [app README](avatar-studio/README.md) has the hardware notes. On an
 8 GB GPU with 32 GB of RAM it targets fp8 weights, block swap and
 the text encoder on the GPU in fp8. Clips can be any length up to an hour. Long
-speech is rendered in parts and joined, so memory stays the same whatever
-the length of each part. This is not a verified fit guarantee for an 8 GB
+speech is rendered in parts and joined, so decoded-frame memory stays bounded as the
+total clip gets longer. This is not a verified fit guarantee for an 8 GB
 card. The download is about 42 GB; complete real-model GPU validation is
 still required. After updating, restart the engine to apply the CPU
 text-encoder fallback repair.
