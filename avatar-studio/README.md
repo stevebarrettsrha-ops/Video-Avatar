@@ -33,6 +33,28 @@ The ≈ sizes are estimates until HuggingFace is asked; setup reads the real
 ones before it downloads. Every link is in
 [`../REFERENCE_LINKS.md`](../REFERENCE_LINKS.md).
 
+**Downloaded weights are reused.** Setup and the Models page check the
+configured model folder, its subfolders, the selected ComfyUI's defaults,
+and its `extra_model_paths.yaml` (including `unet`/`clip` aliases). They
+look for the exact filenames above and do not substitute a different
+model or quantization. Setup retains the selected engine and shared model
+folder. Starting or restarting a local engine registers that shared folder
+without copying weights or rewriting your YAML. For a remote engine, add
+the folder on that machine yourself.
+
+Verified file locations are saved. Routine polling checks those exact
+files; relocation runs only when a saved location fails. An unsuccessful
+search is not repeated until you press **Engine → Recheck** or change the
+configured location. Recheck also discovers files you moved into a new
+subfolder. A missing shared folder stays selected; an empty stock folder
+does not replace it. Downloads into a previously verified folder wait
+until you reconnect it or explicitly select another destination.
+Completed files are not downloaded again, even through the
+single-file download action; delete a damaged file before intentionally
+replacing it. Empty files, Git LFS pointers and structurally incomplete
+safetensors are treated as missing. This checks file structure, not a
+checksum or the model's identity.
+
 **On an 8 GB card with 32 GB of RAM** the defaults aim to reduce memory use.
 They do not establish that a complete render fits that hardware:
 

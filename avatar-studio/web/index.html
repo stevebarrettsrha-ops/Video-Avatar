@@ -1369,16 +1369,16 @@ async function loadPreflight() {
 
 /* ========================= engine page ========================= */
 var depsBusy = null;
-function loadDeps() {
-  if (!depsBusy) depsBusy = fetchDeps().finally(function () { depsBusy = null; });
+function loadDeps(force) {
+  if (!depsBusy) depsBusy = fetchDeps(force === true).finally(function () { depsBusy = null; });
   return depsBusy;
 }
-async function fetchDeps() {
+async function fetchDeps(force) {
   var box = $("dep-list");
   var btn = $("btnRecheck");
   btn.disabled = true; btn.textContent = "Checking…";
   try {
-    var d = await api("/api/deps");
+    var d = await api("/api/deps" + (force ? "?recheck=1" : ""));
     $("torch-index").value = d.torch_index || "";
     box.innerHTML = "";
     var bad = 0;
@@ -2012,7 +2012,7 @@ function wire() {
     generate();
   });
 
-  $("btnRecheck").addEventListener("click", function () { loadDeps(); refreshStatus(); });
+  $("btnRecheck").addEventListener("click", function () { loadDeps(true); refreshStatus(); });
   $("btnRestartEngine").addEventListener("click", restartEngine);
   $("btnPreflight").addEventListener("click", loadPreflight);
   $("btnInstallAll").addEventListener("click", installAllMissing);

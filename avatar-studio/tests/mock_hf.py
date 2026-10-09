@@ -6,6 +6,7 @@ for real — as in the sibling apps' suites.
 """
 import os
 import random
+from harness import tiny_safetensors
 
 from flask import Flask, Response, jsonify, request
 
@@ -66,6 +67,8 @@ def tree_ds(repo, rev):
 
 
 def body_for(path, size):
+    if path.endswith(".safetensors"):
+        return tiny_safetensors(size)
     return random.Random(sum(path.encode()) or 1).randbytes(size)
 
 
