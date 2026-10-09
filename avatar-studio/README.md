@@ -33,13 +33,17 @@ The ≈ sizes are estimates until HuggingFace is asked; setup reads the real
 ones before it downloads. Every link is in
 [`../REFERENCE_LINKS.md`](../REFERENCE_LINKS.md).
 
-**On an 8 GB card (RTX 4060) with 32 GB of RAM** the defaults are set to
-make it fit:
+**On an 8 GB card with 32 GB of RAM** the defaults aim to reduce memory use.
+They do not establish that a complete render fits that hardware:
 
 - **fp8 in memory.** The bf16 file is stored as fp8 as it loads: about
-  14 GB resident instead of 28. This is what makes 32 GB of RAM enough.
+  14 GB for the DiT instead of 28. A cached DiT can coexist with the
+  11 GB CPU text encoder on a later prompt. Allow additional RAM for the
+  VAE, audio models, frames, loading copies and the operating system;
+  32 GB is a tight starting point, not a guarantee.
 - **Block swap 40 of 48.** Most of the DiT stays in system RAM and visits
-  the GPU a block at a time.
+  the GPU a block at a time. Block prefetch defaults to zero, leaving more
+  space for activations instead of keeping an extra block on the card.
 - **umT5 on the GPU in fp8.** The 11 GB text encoder goes to the card as
   fp8, about 6.7 GB, while the DiT is still in RAM. It reads the prompt in
   seconds and is dropped straight after. The result is cached on disk, so
@@ -64,6 +68,18 @@ within 1 GB of a 30-second one, and the joined files were exactly 4,800 and
 per 5.8-second window at 480p. 720p has 2.3× the pixels and takes well over
 twice as long, so on 8 GB start at 480p. The **Preflight** panel on the Engine page measures your VRAM, RAM
 and free disk before anything downloads, and says what applies.
+
+### CPU fallback repair
+
+The upstream cached text encoder loaded T5 onto the GPU even with CPU
+encoding selected. That made its out-of-memory fallback fail before CPU
+encoding began. On engine start/restart, Avatar Studio repairs that specific
+loader argument in `ComfyUI-WanVideoWrapper/nodes.py`, keeping a uniquely
+named original beside it. Unfamiliar upstream code is left unchanged with
+a console message. **Restart the engine after updating.** CPU fallback still
+needs enough system RAM for the bf16 encoder; it is not a memory-free mode.
+For a manually managed remote ComfyUI, apply the equivalent loader fix there
+and restart it; this app cannot edit that machine's files.
 
 ---
 
@@ -185,9 +201,10 @@ AVATAR_REAL_COMFY=http://127.0.0.1:8188 AVATAR_REAL_MODELS=/path/ComfyUI/models 
     python tests/run.py real   # against a real ComfyUI with the three packs
 ```
 
-**314 checks**, all passing, plus an out-of-the-box run from the zip (`tests/out_of_the_box.py`). See [docs/TEST_REPORT.md](docs/TEST_REPORT.md)
-for what each suite proves and the bugs the testing found, and
-[docs/screenshots/](docs/screenshots/) for every screen.
+The historical [test report](docs/TEST_REPORT.md) records 314 passing checks
+and an out-of-the-box ZIP run. For the current memory fixes, validation
+results and remaining hardware limitations, see [MEMORY_AUDIT.md](../MEMORY_AUDIT.md).
+See [docs/screenshots/](docs/screenshots/) for every screen.
 
 `tests/object_info.json` is not guessed. It is the real `/object_info` of
 ComfyUI 0.39 with the three node packs loaded, cut down to the nodes this

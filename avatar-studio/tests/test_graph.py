@@ -243,6 +243,7 @@ def run(slow: bool = False) -> Suite:
                 and loader["load_device"] == "offload_device")
         swap = nodes_of(g, "WanVideoBlockSwap")[0][1]["inputs"]
         s.equal("40 of 48 blocks swapped by default", swap["blocks_to_swap"], 40)
+        s.equal("no extra prefetched block on the small-card default", swap["prefetch_blocks"], 0)
         lora = nodes_of(g, "WanVideoLoraSelect")[0][1]["inputs"]
         s.check("the alpha64 distill LoRA at 1.0, not merged",
                 lora["lora"] == "LongCat_distill_lora_alpha64_bf16.safetensors"

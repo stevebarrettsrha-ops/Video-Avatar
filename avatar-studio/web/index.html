@@ -1353,7 +1353,7 @@ async function loadPreflight() {
     ["System RAM", d.ram ? (d.ram / GIB).toFixed(0) + " GB" : "unknown"],
     ["Free disk", d.free_disk ? (d.free_disk / 1e9).toFixed(0) + " GB" : "unknown"],
     ["Download", d.download ? "≈ " + (d.download / 1e9).toFixed(0) + " GB" : "unknown"],
-    ["Peak resident", d.peak ? "≈ " + (d.peak / 1e9).toFixed(0) + " GB" : "unknown"]];
+    ["Model weights", d.peak ? "≈ " + (d.peak / 1e9).toFixed(0) + " GB" : "unknown"]];
   var html = '<div class="fitem"><div class="n"><b>' +
     (d.verdict === "ok" ? "Should run" : d.verdict === "tight"
       ? "Tight, but workable" : "Not enough headroom") + "</b><span>" +
