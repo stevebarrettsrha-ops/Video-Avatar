@@ -252,8 +252,10 @@ def run(slow: bool = False) -> Suite:
                 (sch["scheduler"], sch["steps"], sch["shift"]),
                 ("longcat_distill_euler", 12, 12.0))
         t5 = nodes_of(g, "WanVideoTextEncodeCached")[0][1]["inputs"]
-        s.check("umT5 encodes on the CPU, cached, with the workflow's negative",
-                t5["device"] == "cpu" and t5["use_disk_cache"]
+        s.check("umT5 encodes on the GPU in fp8, cached, with the workflow's "
+                "negative (5½ min on a real PC's CPU)",
+                t5["device"] == "gpu" and t5["quantization"] == "fp8_e4m3fn"
+                and t5["use_disk_cache"]
                 and t5["negative_prompt"] == comfy.DEFAULT_NEGATIVE)
         rs = nodes_of(g, "ImageResizeKJv2")[0][1]["inputs"]
         s.check("the picture is centre-cropped to 832×480, a multiple of 16",
@@ -264,7 +266,7 @@ def run(slow: bool = False) -> Suite:
         # -- choices travel -------------------------------------------------
         built = client.build({**BASE, "audio_seconds": 3, "audio_start": 5,
                               "size": "480x832", "quantization": "disabled",
-                              "blocks_to_swap": 0, "t5_cpu": False,
+                              "blocks_to_swap": 0, "t5_cpu": True,
                               "tiled_vae": False, "audio_cfg": 4,
                               "steps": 8, "isolate_voice": False,
                               "attention": "sageattn"})
@@ -292,9 +294,9 @@ def run(slow: bool = False) -> Suite:
         s.equal("bf16 storage asked for, bf16 storage given",
                 nodes_of(g, "WanVideoModelLoader")[0][1]["inputs"]["quantization"],
                 "disabled")
-        s.equal("the T5 on the GPU when asked",
-                nodes_of(g, "WanVideoTextEncodeCached")[0][1]["inputs"]["device"],
-                "gpu")
+        t5 = nodes_of(g, "WanVideoTextEncodeCached")[0][1]["inputs"]
+        s.equal("the T5 on the CPU when asked, in bf16 (fp8 is slower there)",
+                (t5["device"], t5["quantization"]), ("cpu", "disabled"))
         s.equal("an attention mode the loader offers is kept",
                 nodes_of(g, "WanVideoModelLoader")[0][1]["inputs"]["attention_mode"],
                 "sageattn")

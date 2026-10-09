@@ -40,8 +40,12 @@ make it fit:
   14 GB resident instead of 28. This is what makes 32 GB of RAM enough.
 - **Block swap 40 of 48.** Most of the DiT stays in system RAM and visits
   the GPU a block at a time.
-- **umT5 on the CPU.** The 11 GB text encoder never touches the GPU. It
-  costs about a minute per new prompt, and the result is cached on disk.
+- **umT5 on the GPU in fp8.** The 11 GB text encoder goes to the card as
+  fp8, about 6.7 GB, while the DiT is still in RAM. It reads the prompt in
+  seconds and is dropped straight after. The result is cached on disk, so
+  the same prompt is never read twice. On the CPU it took **5½ minutes** on
+  a real RTX 4060 PC, and that is now only the fallback. If the card is too
+  full, the render retries on the CPU by itself.
 - **Tiled VAE, 480p, the distill LoRA** (12 steps at cfg 1).
 
 **There is no length limit worth the name — up to an hour per clip.** The
@@ -56,9 +60,9 @@ within 1 GB of a 30-second one, and the joined files were exactly 4,800 and
 480 frames with the speech to the millisecond. A clip's frames need about
 3 GB of RAM at 480p whatever its length; time is the only thing that grows.
 
-**Nothing here has been timed on a real 8 GB card yet.** Expect several
-minutes per 5.8-second window. The first real render will give the true
-number. The **Preflight** panel on the Engine page measures your VRAM, RAM
+**Not timed end to end on a real 8 GB card yet.** Expect several minutes
+per 5.8-second window at 480p. 720p has 2.3× the pixels and takes well over
+twice as long, so on 8 GB start at 480p. The **Preflight** panel on the Engine page measures your VRAM, RAM
 and free disk before anything downloads, and says what applies.
 
 ---
@@ -87,7 +91,23 @@ yourself. Then it does the following:
 4. Installs PyTorch and the packs' requirements.
 5. Downloads the weights, resumably, with one progress bar for the whole
    set.
-6. Starts ComfyUI with `--lowvram --preview-method auto`.
+6. Keeps `transformers` below 5 in ComfyUI's Python (see below).
+7. Starts ComfyUI with `--lowvram --preview-method auto`.
+
+### transformers must stay below 5
+
+From transformers 5.0, the wav2vec2 that the lip sync uses returns no
+hidden states. Every render then stops at `MultiTalkWav2VecEmbeds: 'NoneType'
+object is not subscriptable`. ComfyUI only asks for `>=4.50.3`, so a fresh
+install gets 5.x. The app puts 4.x back (with a diffusers that agrees on
+huggingface-hub) after setup, after any node or PyTorch install, and
+**every time it starts ComfyUI**. The Engine page shows the version, with an
+Install button when it is wrong. With a ComfyUI you start yourself, run this
+in its Python:
+
+```
+python -m pip install "transformers>=4.50.3,<5" "diffusers>=0.33.0"
+```
 
 A failed or cancelled download keeps what arrived and resumes next time.
 
@@ -147,7 +167,7 @@ lips listen to the isolated voice.
 | Attention | sdpa | sageattention 1.0.6 does not work with LongCat. |
 | Isolate the voice | on | MelBandRoFormer. Without it, background music moves the lips too. |
 | Tiled VAE | on | Turn it off only on 16 GB+. |
-| Text encoder on | CPU | GPU only on 16 GB+. |
+| Text encoder on | GPU (fp8) | Seconds. CPU (bf16) took 5½ min on a real 4060 PC, and is used automatically if the GPU is too full. |
 
 ---
 
@@ -160,7 +180,7 @@ AVATAR_REAL_COMFY=http://127.0.0.1:8188 AVATAR_REAL_MODELS=/path/ComfyUI/models 
     python tests/run.py real   # against a real ComfyUI with the three packs
 ```
 
-**270 checks**, all passing, plus an out-of-the-box run from the zip (`tests/out_of_the_box.py`). See [docs/TEST_REPORT.md](docs/TEST_REPORT.md)
+**277 checks**, all passing, plus an out-of-the-box run from the zip (`tests/out_of_the_box.py`). See [docs/TEST_REPORT.md](docs/TEST_REPORT.md)
 for what each suite proves and the bugs the testing found, and
 [docs/screenshots/](docs/screenshots/) for every screen.
 

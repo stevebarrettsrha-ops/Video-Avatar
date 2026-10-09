@@ -280,4 +280,36 @@ def run(slow: bool = False) -> Suite:
                                 precision="bf16")
     s.check("bf16 on a small card says to use fp8",
             any("fp8 is the setting" in n for n in notes))
+
+    # -- transformers 5 breaks the lip sync: kept under 5 --------------------
+    s.check("transformers 4.x and none at all pass, 5.x does not",
+            bootstrap.transformers_ok("4.57.6") and bootstrap.transformers_ok("")
+            and not bootstrap.transformers_ok("5.19.0")
+            and not bootstrap.transformers_ok("5.0.0"))
+    calls: list = []
+    real_v, real_pip = bootstrap.transformers_version, bootstrap.pip_install
+    try:
+        bootstrap.pip_install = lambda py, args, log, *a, **k: calls.append(args)
+        bootstrap.transformers_version = lambda py: "5.19.0"
+        changed = bootstrap.pin_transformers("py", lambda m: None)
+        s.check("5.19 is replaced with 4.x", changed and calls == [
+            bootstrap.PIN_ARGS] and "<5" in bootstrap.TRANSFORMERS_PIN
+            and any(a.startswith("diffusers") for a in bootstrap.PIN_ARGS),
+            str(calls))
+        calls.clear()
+        bootstrap.transformers_version = lambda py: "4.57.6"
+        s.check("4.57 is left alone",
+                not bootstrap.pin_transformers("py", lambda m: None)
+                and not calls)
+    finally:
+        bootstrap.transformers_version, bootstrap.pip_install = real_v, real_pip
+
+    cl = comfy.ComfyClient("http://127.0.0.1:9")
+    cl.history = lambda pid: {"status": {"status_str": "error", "messages": [
+        ["execution_error", {"node_type": "MultiTalkWav2VecEmbeds",
+                             "exception_message":
+                             "'NoneType' object is not subscriptable"}]]}}
+    msg = cl.failed("x") or ""
+    s.check("the error a real PC hit says what it is and how to fix it",
+            "transformers 5" in msg and "transformers<5" in msg, msg)
     return s

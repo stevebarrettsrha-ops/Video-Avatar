@@ -136,6 +136,11 @@ def run(slow: bool = False) -> Suite:
             s.check("an hour is allowed too",
                     "720 windows" in page.locator("#planNote").inner_text())
             page.evaluate("S.audio.duration = 7.5; syncPlan()")
+            page.click('#segSize button[data-v="1280x720"]')
+            s.check("720p warns that it is well over twice as slow",
+                    "start at 480p" in page.locator("#planNote").inner_text())
+            s.equal("the prompt is read on the GPU by default (5½ min on a real "
+                    "PC's CPU)", page.evaluate("segOn('segT5')"), "gpu")
             page.click('#segSize button[data-v="480x832"]')
             s.check("portrait is chosen",
                     "480×832" in page.locator("#planNote").inner_text())

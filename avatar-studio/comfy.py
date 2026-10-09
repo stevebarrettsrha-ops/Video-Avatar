@@ -649,6 +649,7 @@ class ComfyClient:
             "shift": {"names": ["shift"], "value": float(p.get("shift") or 12)},
             "start": {"names": ["start_step"], "value": 0},
             "end": {"names": ["end_step"], "value": -1}})
+        t5_on_cpu = bool(p.get("t5_cpu", False))
         g["6"] = self._node("WanVideoTextEncodeCached", {
             "model": {"names": ["model_name"], "value": files["text_encoder"],
                       "required": True},
@@ -659,12 +660,18 @@ class ComfyClient:
                          "required": True},
             "negative": {"names": ["negative_prompt"],
                          "value": p.get("negative") or DEFAULT_NEGATIVE},
-            "quant": {"names": ["quantization"], "value": "disabled"},
+            # On the GPU the weights go over as fp8 (~6.7 GB with the bf16
+            # token embedding), which fits an 8 GB card: the DiT is still on
+            # the CPU at this point, and the encoder is dropped right after.
+            # It takes seconds. On the CPU it stays bf16 and took 5½ minutes
+            # on an RTX 4060 PC (24 layers at ~14 s). Either way the result
+            # is cached on disk per prompt, and a CUDA out-of-memory here
+            # makes the server retry on the CPU (server.run_job).
+            "quant": {"names": ["quantization"],
+                      "value": "disabled" if t5_on_cpu else "fp8_e4m3fn"},
             "cache": {"names": ["use_disk_cache"], "value": True},
-            # 11 GB of umT5 does not fit next to anything on an 8 GB card;
-            # on the CPU it costs a minute, once per prompt (it is cached)
             "device": {"names": ["device"],
-                       "value": "cpu" if p.get("t5_cpu", True) else "gpu"}})
+                       "value": "cpu" if t5_on_cpu else "gpu"}})
 
         # ---------------- the picture ----------------
         g["10"] = self._node("LoadImage", {
@@ -1014,6 +1021,13 @@ class ComfyClient:
                                 "loads is damaged or unfinished ({}). Delete "
                                 "it on the Models page and download it "
                                 "again.".format(msg.strip()[:80]))
+                    if "nonetype" in low and "subscriptable" in low and \
+                            "wav2vec" in str(data.get("node_type", "")).lower():
+                        return ("MultiTalkWav2VecEmbeds: ComfyUI has "
+                                "transformers 5, which returns nothing from "
+                                "wav2vec2. Restart the engine from the app "
+                                "(Engine page) and it installs 4.x, or run: "
+                                "python -m pip install \"transformers<5\"")
                     if "out of memory" in low:
                         return (f"{data.get('node_type')}: out of memory. Use "
                                 "480p, raise Block swap in Settings, keep fp8 "

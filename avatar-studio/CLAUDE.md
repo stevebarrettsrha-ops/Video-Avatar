@@ -59,6 +59,15 @@
 13. **`AVATAR_REHEARSAL=1` is a test seam only.** `comfy.rehearse()` swaps
     the diffusion for stand-in frames so the real app runs end to end on an
     engine without the model.
+14. **transformers < 5 in ComfyUI's Python.** From 5.0 the wrapper's
+    wav2vec2 gets `hidden_states=None` and MultiTalkWav2VecEmbeds fails
+    ("'NoneType' object is not subscriptable"), as on the first real PC.
+    `bootstrap.pin_transformers` (with diffusers, so huggingface-hub agrees)
+    runs after setup, node/PyTorch installs, and before every engine start.
+15. **umT5 reads the prompt on the GPU in fp8 by default.** On the CPU (bf16)
+    it took 5½ minutes on an RTX 4060 PC. A CUDA OOM in
+    WanVideoTextEncodeCached is retried once with `t5_cpu` (run_job).
+    Saved drafts before v2 do not carry the old CPU default forward.
 
 ## Graceful degradation
 

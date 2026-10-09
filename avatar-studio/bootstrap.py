@@ -843,6 +843,11 @@ class ComfyProcess:
         # anything else the person wants ComfyUI started with — --cpu on a
         # machine with no GPU, --use-sage-attention, a different cache mode
         cmd += extra
+        # an install from before the pin, or a node pack that upgraded it
+        try:
+            pin_transformers(python, prog.log)
+        except Exception as exc:  # noqa: BLE001
+            prog.log(f"Could not install transformers 4.x: {exc}")
         prog.log("Launching ComfyUI: " + " ".join(cmd))
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) \
             if platform.system() == "Windows" else 0
@@ -1229,6 +1234,48 @@ def pip_install(python: str, args: list[str], log, on_pct=None,
         _PIP_RAW_OK.pop(python, None)
 
 
+# transformers 5 broke the lip sync. WanVideoWrapper's wav2vec2 (a subclass of
+# transformers' Wav2Vec2Model) calls the encoder with output_hidden_states=True
+# and reads .hidden_states; from 5.0 the encoder ignores that argument and
+# returns None, so MultiTalkWav2VecEmbeds fails with "'NoneType' object is not
+# subscriptable" on every render. Measured: 13 hidden states on 4.57.6, None
+# on 5.19.0. ComfyUI asks only for >=4.50.3, so a fresh install gets 5.x.
+TRANSFORMERS_PIN = "transformers>=4.50.3,<5"
+# transformers 4.x wants huggingface-hub <1.0, and the newest diffusers wants
+# >=1.32; naming diffusers in the same install lets pip step it back to one
+# that agrees (0.39 on the day). `pip check` clean afterwards, measured.
+PIN_ARGS = [TRANSFORMERS_PIN, "diffusers>=0.33.0"]
+
+
+def transformers_version(python: str) -> str:
+    """The transformers in ComfyUI's Python, without importing it ('' if none)."""
+    try:
+        r = _run([python, "-c", "import importlib.metadata as m;"
+                  "print(m.version('transformers'))"], timeout=60)
+    except Exception:
+        return ""
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def transformers_ok(version: str) -> bool:
+    try:
+        return not version or int(version.split(".")[0]) < 5
+    except ValueError:
+        return True
+
+
+def pin_transformers(python: str, log, on_pct=None, should_cancel=None) -> bool:
+    """Bring transformers back under 5 if it is not. True if it changed."""
+    have = transformers_version(python)
+    if transformers_ok(have):
+        return False
+    log(f"transformers {have} breaks the lip sync (wav2vec2 returns no hidden "
+        "states); installing 4.x")
+    pip_install(python, PIN_ARGS, log, on_pct,
+                should_cancel=should_cancel)
+    return True
+
+
 def torch_index(cfg: dict) -> str:
     if cfg.get("torch_index"):
         return cfg["torch_index"]
@@ -1416,6 +1463,13 @@ def run_setup(cfg: dict, prog: Progress, comfy: ComfyProcess,
                                     _pip_pct(prog, path.name))
                     except Exception as exc:  # noqa: BLE001
                         prog.log(f"Skipped {path.name} requirements: {exc}")
+            # after every requirements file: any of them can pull transformers 5
+            prog.track("deps", None, "Checking transformers…")
+            try:
+                pin_transformers(cfg["python"], prog.log,
+                                 _pip_pct(prog, "transformers"))
+            except Exception as exc:  # noqa: BLE001
+                prog.log(f"Could not install transformers 4.x: {exc}")
             prog.finish("deps", f"Installed into {Path(cfg['python']).name}")
 
         prog.begin("models")

@@ -272,6 +272,25 @@ def run(slow: bool = False) -> Suite:
                     job["status"] == "error" and "Block swap" in job["error"],
                     job.get("error", ""))
 
+    # -- a card too full for umT5 in fp8: the prompt is read on the CPU -----
+    with comfy(delay=0.2, MOCK_T5_OOM="1") as mock, Workspace() as ws:
+        fake_weights(ws / "models")
+        with studio(mock.url, ws / "data", ws / "models") as app:
+            upload(app.url, "face.png", PNG)
+            upload(app.url, "speech.wav", WAV)
+            requests.post(f"{app.url}/api/generate", json={
+                "image": "face.png", "audio": "speech.wav",
+                "audio_seconds": 3}, timeout=20)
+            job = finish_jobs(app.url)[0]
+            sent = list(requests.get(f"{mock.url}/prompts", timeout=10)
+                        .json().values())
+            devices = [n["inputs"]["device"] for g in sent for n in g.values()
+                       if n["class_type"] == "WanVideoTextEncodeCached"]
+            s.check("a text-encoder OOM on the GPU is retried on the CPU, "
+                    "and the clip still arrives",
+                    job["status"] == "done" and devices == ["gpu", "cpu"],
+                    f"{job.get('status')} {job.get('error', '')} {devices}")
+
     # -- missing weights, and the set download -----------------------------
     with comfy() as mock, hub() as hf, Workspace() as ws:
         (ws / "models").mkdir()

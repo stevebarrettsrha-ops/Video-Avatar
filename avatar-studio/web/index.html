@@ -579,7 +579,7 @@
     </div></div></div>
   <div class="orow"><span class="lab">Text encoder on</span><div class="ctl">
     <div class="chips" id="segT5">
-      <button class="on" data-v="cpu">CPU</button><button data-v="gpu">GPU</button>
+      <button data-v="cpu" title="bf16 on the CPU: minutes per new prompt">CPU</button><button class="on" data-v="gpu" title="fp8 on the GPU: seconds. Falls back to the CPU by itself if the card is too full.">GPU (fp8)</button>
     </div></div></div>
   <div class="orow"><span class="lab">Seed</span><div class="ctl">
     <input type="text" id="seed" placeholder="random each time" inputmode="numeric">
@@ -792,7 +792,11 @@ function syncPlan() {
       (parts > 1 ? ', in <b id="partsNote">' + parts + " parts</b> joined into " +
         "one clip at the end" : "") +
       ". The frames need about <b>" + (ram / 1073741824).toFixed(1) +
-      " GB</b> of RAM" + (parts > 1 ? " — the same for any length" : "") + ".";
+      " GB</b> of RAM" + (parts > 1 ? " — the same for any length" : "") + "." +
+      (S.size === "1280x720" || S.size === "720x1280"
+        ? ' <span id="hdNote">720p has 2.3× the pixels of 480p, so each window ' +
+          "takes well over twice as long; on an 8 GB card start at 480p.</span>"
+        : "");
   }
   var cost = $("costNote");
   if (cost) {
@@ -830,7 +834,7 @@ function setSlider(row, value) {
 var draftReady = false;
 function saveDraft() {
   if (!draftReady) return;
-  var d = { v: 1, prompt: $("description").value, size: S.size,
+  var d = { v: 2, prompt: $("description").value, size: S.size,
     image: S.image ? { name: S.image.name } : null,
     audio: S.audio ? { name: S.audio.name, label: S.audio.label,
                        duration: S.audio.duration } : null,
@@ -854,7 +858,8 @@ function loadDraft() {
     SLIDERS.forEach(function (r) { if (d[r[0]] != null) setSlider(r, d[r[0]]); });
     if (d.quant) $("quant-sel").value = d.quant;
     if (d.attn) $("attn-sel").dataset.want = d.attn;
-    setSeg("segVoice", d.voice); setSeg("segTiled", d.tiled); setSeg("segT5", d.t5);
+    setSeg("segVoice", d.voice); setSeg("segTiled", d.tiled);
+    if (d.v >= 2) setSeg("segT5", d.t5);
     if (d.negative) $("neg-prompt").value = d.negative;
   }
   draftReady = true;
@@ -1974,7 +1979,7 @@ function wire() {
     var prec = (S.status && S.status.config && S.status.config.precision) || "fp8";
     $("quant-sel").value = prec === "bf16" ? "disabled" : "fp8_e4m3fn";
     $("attn-sel").value = "sdpa";
-    setSeg("segVoice", "on"); setSeg("segTiled", "on"); setSeg("segT5", "cpu");
+    setSeg("segVoice", "on"); setSeg("segTiled", "on"); setSeg("segT5", "gpu");
     $("seed").value = "";
     $("neg-prompt").value = DEFAULT_NEGATIVE;
     syncPlan(); toast("Back to defaults.");

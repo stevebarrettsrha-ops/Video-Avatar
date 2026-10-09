@@ -389,7 +389,24 @@ def run_job(job_id: str, params: dict) -> None:
             set_state(prompt_id=prompt_id,
                       stage="Queued in ComfyUI" if part["index"] == 0
                       else f"Part {part['index'] + 1} of {len(parts)} queued")
-            outs = _wait_prompt(job_id, prompt_id, built, set_state, started)
+            try:
+                outs = _wait_prompt(job_id, prompt_id, built, set_state,
+                                    started)
+            except Failed as exc:
+                # umT5 in fp8 needs ~6.7 GB free; a card that also drives
+                # the desktop may not have it. The CPU always fits.
+                if params.get("t5_cpu") or not str(exc).startswith(
+                        "WanVideoTextEncodeCached: out of memory"):
+                    raise
+                params["t5_cpu"] = True
+                built = client.build(params, part=part["index"],
+                                     prev_video=prev_name)
+                prompt_id = client.queue(built["prompt"])
+                set_state(prompt_id=prompt_id, t5_fallback=True,
+                          stage="The text encoder did not fit on the GPU; "
+                                "reading the prompt on the CPU instead")
+                outs = _wait_prompt(job_id, prompt_id, built, set_state,
+                                    started)
             if len(parts) == 1:
                 break
             # keep the part, and hand it to ComfyUI for the next one's seam

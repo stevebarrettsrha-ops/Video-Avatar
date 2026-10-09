@@ -1,18 +1,19 @@
 # Test report — LongCat Avatar Studio
 
-**Result: 270 of 270 checks pass, and an out-of-the-box run from the
-shipped zip passes.**
+**Result: 277 of 277 checks pass, including 33 against a real ComfyUI.
+An out-of-the-box run from the shipped zip passes, and the error from the
+first real PC is reproduced and fixed on the real node.**
 
-Earlier result line, kept for history: 267 of 267 checks pass (`python tests/run.py`, 334 s with the real engine).
+Earlier result lines, kept for history: 270 of 270; 267 of 267 checks pass (`python tests/run.py`, 334 s with the real engine).
 
 | Suite | Checks | What it proves |
 |---|---:|---|
 | gate | 5 | Every module compiles; the page's script parses; every id the script uses exists; every button, chip and slider has a listener; `run.sh` parses. |
-| units | 53 | Frame and window maths read from kijai's workflow file. The page's copy of the maths gives the same answers. The weight set and folders; the preflight verdicts; the RAM estimate; how ComfyUI is launched. |
+| units | 57 | Frame and window maths read from kijai's workflow file. The page's copy of the maths gives the same answers. The weight set and folders; the preflight verdicts; the RAM estimate; how ComfyUI is launched. |
 | graph | 73 | The graphs `comfy.py` builds, against the real node schema: window wiring, seams, audio routing, every setting, and the fallbacks for missing optional parts. |
-| api | 59 | The server end to end: uploads, validation, two-window renders with per-window progress, seeds, cancel, delete, the localhost guard, the preflight, the dependency list, a full set download, and stale or old engines. |
+| api | 60 | The server end to end: uploads, validation, two-window renders with per-window progress, seeds, cancel, delete, the localhost guard, the preflight, the dependency list, a full set download, and stale or old engines. |
 | stress | 20 | 400 fuzzed requests, 12 concurrent renders, parallel uploads and deletes, hostile paths, and damaged gallery/config files. |
-| ui | 27 | The page in Chromium: picture and speech, trimming, the plan line, the RAM warning, settings, generate, the lightbox, reuse, **recording from a (fake) microphone**, a draft surviving a reload, and every page. |
+| ui | 29 | The page in Chromium: picture and speech, trimming, the plan line, the RAM warning, settings, generate, the lightbox, reuse, **recording from a (fake) microphone**, a draft surviving a reload, and every page. |
 | real | 33 | **A real ComfyUI 0.39** with the three node packs. Details below. |
 
 ## Against a real ComfyUI
@@ -76,6 +77,38 @@ install updated it in place in 13 seconds.
    in parts and joined, with no length limit.
 7. **The empty-feed message was split across grid columns**, and the Seed
    row read "Random / Random". Both are fixed.
+
+## The first real PC (RTX 4060, 8 GB, 32 GB RAM, Windows)
+
+A 2.8 s recording at 720p hit two problems.
+
+1. **Reading the prompt took 5½ minutes.** The console showed umT5 running
+   its 24 layers on the CPU in bf16, at about 14 s a layer. The text encoder
+   now goes to the GPU in fp8 by default, about 6.7 GB, while the DiT is
+   still in RAM. That takes seconds, and the result is cached on disk per
+   prompt as before. If the card is too full (CUDA OOM in that node), the
+   render retries once on the CPU by itself. The api suite drives that
+   retry, and the graph, units and ui suites check the defaults. The plan
+   line now says 720p takes well over twice as long as 480p.
+2. **Then every render failed:** `MultiTalkWav2VecEmbeds: 'NoneType' object
+   is not subscriptable`. The cause is transformers 5. The wrapper's
+   wav2vec2 subclass asks the encoder for `output_hidden_states`, and from
+   5.0 the encoder ignores it. Reproduced on the real ComfyUI from the
+   out-of-the-box run, running the real node on a randomly initialised
+   wav2vec2 file:
+
+   | transformers | MultiTalkWav2VecEmbeds |
+   |---|---|
+   | 5.19.0 (what ComfyUI's `>=4.50.3` installs) | **error: 'NoneType' object is not subscriptable** |
+   | 4.57.6 | success (13 hidden states) |
+
+   The app now keeps transformers below 5 in ComfyUI's Python. It asks for
+   diffusers in the same install, because the newest diffusers needs
+   huggingface-hub 1.32 or later and transformers 4 needs below 1.0. pip
+   settles on diffusers 0.39, and `pip check` is clean. The fix runs after
+   setup, after node and PyTorch installs, and before every engine start.
+   Verified from a clean 5.19: the app's own `ComfyProcess.start` installed
+   4.57.6, ComfyUI loaded every pack, and the node succeeded.
 
 ## Out of the box: the shipped zip, start to finish
 
