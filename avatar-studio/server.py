@@ -358,6 +358,10 @@ def _wait_prompt(job_id: str, prompt_id: str, built: dict, set_state,
             outs = [] if err else client.outputs(prompt_id)
             unreachable_since = None
         except requests.RequestException:
+            # an engine this app started, whose process has exited, is not
+            # coming back to finish: say so now, with what it last said
+            if comfy_proc.proc is not None and not comfy_proc.alive():
+                raise Failed(engine_died_message())
             # a machine paging the DiT through RAM can stall a reply past its
             # timeout; that is not a failed render. Only an engine gone for
             # minutes is.
@@ -375,7 +379,15 @@ def _wait_prompt(job_id: str, prompt_id: str, built: dict, set_state,
         took = elapsed(time.time() - started)
         where = (f" · part {built['part'] + 1} of {parts}" if parts > 1 else "")
         local = built["samplers"].get(str(wp.get("node") or ""))
-        if maximum and local is not None:
+        steps = built.get("steps") or 0
+        if maximum and local is not None and steps and maximum != steps:
+            # the sampler also reports moving the model's tensors onto the
+            # card (1896 of them for LongCat): not steps, and not progress
+            # through the clip — a real PC showed "step 424 of 1896"
+            set_state(stage=(f"Window {local + 1} of {windows} · loading the "
+                             f"model onto the GPU, {value} of {maximum}{where}"
+                             f" · {took}"))
+        elif maximum and local is not None:
             # one bar across every window of the clip: each an equal slice
             window = local                       # samplers map to the clip's
             done = (window + min(value / maximum, 1)) / windows
@@ -397,6 +409,20 @@ def _wait_prompt(job_id: str, prompt_id: str, built: dict, set_state,
             raise Failed("Nothing after two days. On a small card that is "
                          "usually paging rather than rendering — see the "
                          "preflight on the Engine page.")
+
+
+def engine_died_message() -> str:
+    """The engine's last words worth showing: a fatal error or traceback line
+    beats the progress bars that usually end the log."""
+    lines = [ln.strip() for ln in comfy_proc.tail(200) if ln.strip()]
+    keys = ("fatal", "error", "exception", "killed", "out of memory")
+    said = next((ln for ln in reversed(lines)
+                 if any(k in ln.lower() for k in keys)
+                 and not ln.startswith("[Avatar Studio]")), "")
+    return ("ComfyUI stopped in the middle of the render"
+            + (f": {said[:220]}" if said else "")
+            + ". The Engine console has the rest; press Start ComfyUI and "
+              "Generate again.")
 
 
 def _download(item: dict, dest: Path) -> None:

@@ -922,6 +922,7 @@ class ComfyClient:
         return {"prompt": g, "seed": seed, "files": files, "frames": frames,
                 "windows": windows, "rendered": total, "samplers": samplers,
                 "window_of": window_of, "part": part,
+                "steps": int(p.get("steps") or 12),
                 "parts": layout["parts"], "this_part": this,
                 "width": width, "height": height, "fps": FPS,
                 "size": f"{width}x{height}",

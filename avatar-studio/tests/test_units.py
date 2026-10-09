@@ -230,8 +230,9 @@ def run(slow: bool = False) -> Suite:
     import time as _time
     tmp = Path(tempfile.mkdtemp(prefix="avatar-launch-"))
     (tmp / "main.py").write_text(
-        "import sys, pathlib\n"
+        "import os, sys, pathlib\n"
         "pathlib.Path(__file__).with_name('argv.txt').write_text(' '.join(sys.argv[1:]))\n"
+        "pathlib.Path(__file__).with_name('mpl.txt').write_text(os.environ.get('MPLBACKEND', ''))\n"
         "print('main.py: error: pretend ComfyUI refused its flags')\n"
         "sys.exit(2)\n")
     bootstrap.DATA_DIR = tmp
@@ -251,6 +252,8 @@ def run(slow: bool = False) -> Suite:
                 "cache on (it keeps the model loaded from part to part)",
                 "--lowvram" in argv and "--cache-none" not in argv
                 and "--preview-method auto" in argv, argv)
+        s.equal("matplotlib is kept off Tk (it killed ComfyUI mid-render on "
+                "a Windows PC)", (tmp / "mpl.txt").read_text(), "Agg")
         argv, took, up = launch("--cpu")
         s.check("a memory mode of the person's own replaces --lowvram "
                 "(ComfyUI refuses both)",
@@ -362,6 +365,13 @@ def run(slow: bool = False) -> Suite:
     spec.loader.exec_module(shim)
     s.check("the node registers the marker the app looks for",
             bootstrap.COMPAT_NODE in shim.NODE_CLASS_MAPPINGS)
+    try:
+        import matplotlib
+        s.equal("and puts matplotlib on Agg, for engines started elsewhere",
+                matplotlib.get_backend().lower(), "agg")
+    except ImportError:
+        s.check("(matplotlib not installed here; the node tolerates that)",
+                shim.agg_backend() is False)
 
     cl = comfy.ComfyClient("http://127.0.0.1:9")
     cl.history = lambda pid: {"status": {"status_str": "error", "messages": [

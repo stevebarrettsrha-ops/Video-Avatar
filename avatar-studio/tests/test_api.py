@@ -292,6 +292,73 @@ def run(slow: bool = False) -> Suite:
                     job["status"] == "done" and devices == ["gpu", "cpu"],
                     f"{job.get('status')} {job.get('error', '')} {devices}")
 
+    # -- the engine dies mid-render: said at once, not after five minutes --
+    with Workspace() as ws:
+        install = fake_install(ws / "app")
+        url = f"http://127.0.0.1:{free_port()}"
+        with studio(url, ws / "data", install / "models",
+                    comfy_dir=str(install), python=sys.executable,
+                    auto_start_comfy=False) as app:
+            requests.post(f"{app.url}/api/comfy/start", timeout=60)
+            wait_for(lambda: requests.get(f"{app.url}/api/status", timeout=20)
+                     .json()["ready"], timeout=60)
+            requests.post(f"{url}/delay", json={"seconds": 30}, timeout=5)
+            upload(app.url, "face.png", PNG)
+            upload(app.url, "speech.wav", WAV)
+            job_id = requests.post(f"{app.url}/api/generate", json={
+                "image": "face.png", "audio": "speech.wav",
+                "audio_seconds": 3}, timeout=20).json()["jobs"][0]
+
+            def job():
+                return next(j for j in requests.get(
+                    f"{app.url}/api/jobs", timeout=10).json()
+                    if j["id"] == job_id)
+            wait_for(lambda: "Queued" not in job().get("stage", "Queued"),
+                     30, 0.3)
+            time.sleep(1)
+            s.check("(the render is under way in the engine)",
+                    job()["status"] == "running", str(job()))
+            requests.post(f"{url}/crash", timeout=5)
+            began = time.time()
+            wait_for(lambda: job()["status"] != "running", 60, 0.3)
+            took, j = time.time() - began, job()
+            s.check("a managed engine that dies mid-render fails the job within "
+                    "seconds, with its fatal line",
+                    j["status"] == "error" and took < 15
+                    and "stopped in the middle" in j.get("error", "")
+                    and "fatal" in j.get("error", "").lower(),
+                    f"{took:.1f}s {j.get('status')} {j.get('error', '')}")
+
+    # -- the sampler also counts tensors onto the card: not steps ----------
+    with comfy(delay=3, MOCK_LOAD_TENSORS="1896") as mock, Workspace() as ws:
+        fake_weights(ws / "models")
+        with studio(mock.url, ws / "data", ws / "models") as app:
+            upload(app.url, "face.png", PNG)
+            upload(app.url, "speech.wav", WAV)
+            job_id = requests.post(f"{app.url}/api/generate", json={
+                "image": "face.png", "audio": "speech.wav",
+                "audio_seconds": 3}, timeout=20).json()["jobs"][0]
+            seen: list = []
+
+            def watch():
+                job = next(j for j in requests.get(
+                    f"{app.url}/api/jobs", timeout=10).json()
+                    if j["id"] == job_id)
+                seen.append((job.get("stage", ""), job.get("pct", 0)))
+                return job["status"] != "running"
+            wait_for(watch, 60, 0.2)
+            loading = [x for x in seen if "loading the model onto the GPU" in x[0]]
+            s.check("loading the model's 1896 tensors is named as such, never "
+                    "\"step 424 of 1896\" (what a real PC showed)",
+                    loading and not any("of 1896" in x[0] and "step" in x[0]
+                                        for x in seen), str(seen[:6]))
+            s.check("and it does not move the bar as if steps were done",
+                    all(p <= 12 for _, p in loading), str(loading[:3]))
+            s.check("the real steps are still counted",
+                    any("step 12 of 12" in x[0] or "step 11 of 12" in x[0]
+                        for x in seen) or any("step" in x[0] and "of 12" in x[0]
+                                              for x in seen), str(seen[-4:]))
+
     # -- transformers 5 in ComfyUI's Python ---------------------------------
     # the real PC's case: pip cannot downgrade it. The compatibility node is
     # copied in instead, pip is never run, and the engine comes up ready.

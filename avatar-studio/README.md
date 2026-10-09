@@ -94,6 +94,16 @@ yourself. Then it does the following:
 6. Adds its wav2vec2 compatibility node to ComfyUI (see below).
 7. Starts ComfyUI with `--lowvram --preview-method auto`.
 
+### ComfyUI crashing mid-render on Windows
+
+The wrapper's sampler draws a small chart with matplotlib on every run. On
+Windows with Tk installed, matplotlib picked its Tk GUI backend, and ComfyUI
+died partway through a render with `Tcl_AsyncDelete: async handler deleted
+by the wrong thread`. The app now starts ComfyUI with `MPLBACKEND=Agg` (no
+GUI), and its compatibility node does the same for a ComfyUI started some
+other way. If the engine the app started does die during a render, the clip
+fails at once and quotes the engine's last fatal line.
+
 ### The lip sync on transformers 5
 
 From transformers 5.0, the wav2vec2 that the lip sync uses returns no
@@ -175,7 +185,7 @@ AVATAR_REAL_COMFY=http://127.0.0.1:8188 AVATAR_REAL_MODELS=/path/ComfyUI/models 
     python tests/run.py real   # against a real ComfyUI with the three packs
 ```
 
-**307 checks**, all passing, plus an out-of-the-box run from the zip (`tests/out_of_the_box.py`). See [docs/TEST_REPORT.md](docs/TEST_REPORT.md)
+**314 checks**, all passing, plus an out-of-the-box run from the zip (`tests/out_of_the_box.py`). See [docs/TEST_REPORT.md](docs/TEST_REPORT.md)
 for what each suite proves and the bugs the testing found, and
 [docs/screenshots/](docs/screenshots/) for every screen.
 

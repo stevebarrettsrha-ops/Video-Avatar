@@ -1066,8 +1066,14 @@ class ComfyProcess:
         except OSError:                  # an orphan still holds it on Windows
             log = DATA_DIR / f"comfy-{os.getpid()}.log"
             out = open(log, "wb")
+        # MPLBACKEND=Agg: the wrapper's sampler plots its sigmas with
+        # matplotlib on every run. On Windows with Tk installed, matplotlib
+        # picks the Tk GUI backend, and Tk objects made on the render thread
+        # then get collected on the web-server thread, which kills ComfyUI
+        # ("Tcl_AsyncDelete: async handler deleted by the wrong thread",
+        # Windows fatal exception) mid-render. A real RTX 4060 PC hit it.
         env = {**os.environ, "PYTHONUNBUFFERED": "1",
-               "PYTHONIOENCODING": "utf-8"}
+               "PYTHONIOENCODING": "utf-8", "MPLBACKEND": "Agg"}
         try:
             self.proc = subprocess.Popen(cmd, cwd=str(comfy_dir), stdout=out,
                                          stderr=subprocess.STDOUT, env=env,

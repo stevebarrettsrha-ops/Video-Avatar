@@ -77,6 +77,18 @@
     it took 5½ minutes on an RTX 4060 PC. A CUDA OOM in
     WanVideoTextEncodeCached is retried once with `t5_cpu` (run_job).
     Saved drafts before v2 do not carry the old CPU default forward.
+16. **matplotlib stays off Tk.** The wrapper's sampler plots its sigmas on
+    every run; on Windows with Tk installed that made Tk objects on the
+    render thread which were collected on the server thread, and ComfyUI
+    died mid-render ("Tcl_AsyncDelete … wrong thread", fatal exception), as
+    on the first real PC. ComfyUI is launched with `MPLBACKEND=Agg`, and the
+    compatibility node forces Agg for engines started some other way.
+    Reproduced with Tk under Xvfb; both fixes stop it.
+17. **A managed engine that dies fails the job at once** (`engine_died_message`
+    quotes its fatal line), instead of waiting five minutes unreachable. The
+    sampler's "Loading transformer parameters" progress (1896 tensors) is
+    labelled as loading, not as steps: the stage counts steps only when the
+    progress max equals the scheduler's steps.
 
 ## Graceful degradation
 

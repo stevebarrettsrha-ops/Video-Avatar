@@ -11,13 +11,33 @@ This puts the 4.x behaviour back for callers that ask for it: the input to
 each layer, then the encoder's output, the same tuple 4.x returned (13 for
 the 12-layer model, equal to 4.57.6's to the last bit; docs/TEST_REPORT.md).
 It changes nothing on transformers 4.x, or when hidden states are not asked
-for. Avatar Studio copies it into ComfyUI/custom_nodes before every start
+for.
+
+It also puts matplotlib on its Agg backend. The wrapper's sampler plots its
+sigmas on every run; on Windows with Tk installed, matplotlib's default Tk
+backend makes objects on the render thread that get collected on the
+web-server thread, and ComfyUI dies ("Tcl_AsyncDelete: async handler deleted
+by the wrong thread"). The app also launches ComfyUI with MPLBACKEND=Agg;
+this covers an engine started some other way. Avatar Studio copies it into ComfyUI/custom_nodes before every start
 (bootstrap.install_compat). Its one node does nothing; it is there so the app
 can see in /object_info that a running engine has loaded the shim.
 """
 
 MARK = "_avatar_studio_compat"
-VERSION = 1
+VERSION = 2
+
+
+def agg_backend() -> bool:
+    """matplotlib off the GUI: Agg only renders to buffers, which is all the
+    wrapper's plot needs."""
+    try:
+        import matplotlib
+        if matplotlib.get_backend().lower() != "agg":
+            matplotlib.use("Agg", force=True)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"[Avatar Studio] matplotlib backend not changed: {exc}")
+        return False
 
 
 class AvatarStudioCompat:
@@ -95,4 +115,5 @@ def apply() -> bool:
     return True
 
 
+agg_backend()
 apply()
