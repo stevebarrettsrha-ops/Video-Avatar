@@ -230,8 +230,9 @@ def run(slow: bool = False) -> Suite:
     import time as _time
     tmp = Path(tempfile.mkdtemp(prefix="avatar-launch-"))
     (tmp / "main.py").write_text(
-        "import sys, pathlib\n"
+        "import os, sys, pathlib\n"
         "pathlib.Path(__file__).with_name('argv.txt').write_text(' '.join(sys.argv[1:]))\n"
+        "pathlib.Path(__file__).with_name('mpl.txt').write_text(os.environ.get('MPLBACKEND', ''))\n"
         "print('main.py: error: pretend ComfyUI refused its flags')\n"
         "sys.exit(2)\n")
     bootstrap.DATA_DIR = tmp
@@ -251,6 +252,8 @@ def run(slow: bool = False) -> Suite:
                 "cache on (it keeps the model loaded from part to part)",
                 "--lowvram" in argv and "--cache-none" not in argv
                 and "--preview-method auto" in argv, argv)
+        s.equal("matplotlib is kept off Tk (it killed ComfyUI mid-render on "
+                "a Windows PC)", (tmp / "mpl.txt").read_text(), "Agg")
         argv, took, up = launch("--cpu")
         s.check("a memory mode of the person's own replaces --lowvram "
                 "(ComfyUI refuses both)",
@@ -331,6 +334,44 @@ def run(slow: bool = False) -> Suite:
                 and "transformers>=4.50.3,<5" in outcome, outcome)
     finally:
         bootstrap.transformers_version, bootstrap.pip_install = real_v, real_pip
+
+    # -- the compatibility node: the fix that needs no pip ------------------
+    import tempfile
+    import importlib.util
+    with tempfile.TemporaryDirectory() as tmp:
+        cdir = Path(tmp) / "ComfyUI"
+        cdir.mkdir()
+        s.check("no ComfyUI, no node", not bootstrap.install_compat(cdir))
+        (cdir / "main.py").write_text("")
+        s.check("the node is copied into custom_nodes",
+                bootstrap.install_compat(cdir)
+                and bootstrap.compat_installed(cdir))
+        dest = cdir / "custom_nodes" / bootstrap.COMPAT_NAME / "__init__.py"
+        dest.write_text("# an older copy")
+        s.check("an outdated copy is not counted, and is replaced",
+                bootstrap.install_compat(cdir) and dest.read_bytes()
+                == (bootstrap.COMPAT_SRC / "__init__.py").read_bytes())
+        real_v = bootstrap.transformers_version
+        try:
+            bootstrap.transformers_version = lambda py, cached=False: "5.19.0"
+            s.check("transformers 5 is fine with the node, not without",
+                    bootstrap.lipsync_ok("py", cdir)
+                    and not bootstrap.lipsync_ok("py", Path(tmp) / "other"))
+        finally:
+            bootstrap.transformers_version = real_v
+    spec = importlib.util.spec_from_file_location(
+        "avatar_studio_compat", bootstrap.COMPAT_SRC / "__init__.py")
+    shim = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(shim)
+    s.check("the node registers the marker the app looks for",
+            bootstrap.COMPAT_NODE in shim.NODE_CLASS_MAPPINGS)
+    try:
+        import matplotlib
+        s.equal("and puts matplotlib on Agg, for engines started elsewhere",
+                matplotlib.get_backend().lower(), "agg")
+    except ImportError:
+        s.check("(matplotlib not installed here; the node tolerates that)",
+                shim.agg_backend() is False)
 
     cl = comfy.ComfyClient("http://127.0.0.1:9")
     cl.history = lambda pid: {"status": {"status_str": "error", "messages": [

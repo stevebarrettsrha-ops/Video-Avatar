@@ -1033,18 +1033,20 @@ class ComfyProcess:
         # anything else the person wants ComfyUI started with — --cpu on a
         # machine with no GPU, --use-sage-attention, a different cache mode
         cmd += extra
-        # an install from before the pin, or a node pack that upgraded it.
-        # If 5.x stays, do not start at all: the engine would come up "ready"
-        # and every render would fail in wav2vec2.
+        # transformers 5 breaks the lip sync: the compatibility node fixes it
+        # without touching the Python; failing that, 4.x. If neither, do not
+        # start: the engine would come up "ready" and every render would
+        # fail in wav2vec2.
         try:
-            pin_transformers(python, prog.log)
+            ensure_lipsync(python, comfy_dir, prog.log)
         except Exception as exc:  # noqa: BLE001
             have = transformers_version(python)
-            if not transformers_ok(have):
+            if not lipsync_ok(python, comfy_dir):
                 msg = (f"ComfyUI was not started: it has transformers {have}, "
                        "with which every render fails in the lip sync, and "
-                       f"installing 4.x failed ({str(exc)[:200]}). On the "
-                       "Engine page press Install next to transformers, or "
+                       "neither the compatibility node nor transformers 4.x "
+                       f"could be installed ({str(exc)[:200]}). Check that "
+                       f"{Path(comfy_dir) / 'custom_nodes'} is writable, or "
                        "run: " + transformers_fix_command(python))
                 prog.log(msg)
                 self.note(msg)
@@ -1064,8 +1066,14 @@ class ComfyProcess:
         except OSError:                  # an orphan still holds it on Windows
             log = DATA_DIR / f"comfy-{os.getpid()}.log"
             out = open(log, "wb")
+        # MPLBACKEND=Agg: the wrapper's sampler plots its sigmas with
+        # matplotlib on every run. On Windows with Tk installed, matplotlib
+        # picks the Tk GUI backend, and Tk objects made on the render thread
+        # then get collected on the web-server thread, which kills ComfyUI
+        # ("Tcl_AsyncDelete: async handler deleted by the wrong thread",
+        # Windows fatal exception) mid-render. A real RTX 4060 PC hit it.
         env = {**os.environ, "PYTHONUNBUFFERED": "1",
-               "PYTHONIOENCODING": "utf-8"}
+               "PYTHONIOENCODING": "utf-8", "MPLBACKEND": "Agg"}
         try:
             self.proc = subprocess.Popen(cmd, cwd=str(comfy_dir), stdout=out,
                                          stderr=subprocess.STDOUT, env=env,
@@ -1453,8 +1461,9 @@ _TF_SEEN: dict[str, str] = {}
 
 
 class TransformersBlocked(RuntimeError):
-    """transformers 5 is installed and 4.x could not be put back: every
-    render would fail in wav2vec2, so the engine is not started."""
+    """transformers 5 is installed, and neither the compatibility node nor
+    4.x could be put in place: every render would fail in wav2vec2, so the
+    engine is not started."""
 
 
 def transformers_version(python: str, cached: bool = False) -> str:
@@ -1507,6 +1516,62 @@ def pin_transformers(python: str, log, on_pct=None, should_cancel=None) -> bool:
     if not transformers_ok(now):
         raise RuntimeError(f"transformers is still {now} after the install")
     return True
+
+
+# The first fix: Avatar Studio's own custom node puts the 4.x hidden states
+# back on transformers 5 (compat/avatar_studio_compat, identical output to
+# 4.57.6, measured). Nothing in the person's Python changes, so nothing can
+# fail the way a downgrade did on a real Windows PC. The downgrade above
+# stays only for when the shim cannot be copied into custom_nodes.
+COMPAT_NAME = "avatar_studio_compat"
+COMPAT_SRC = APP_DIR / "compat" / COMPAT_NAME
+COMPAT_NODE = "AvatarStudioCompat"
+
+
+def compat_installed(comfy_dir) -> bool:
+    if not comfy_dir:
+        return False
+    dest = Path(comfy_dir) / "custom_nodes" / COMPAT_NAME / "__init__.py"
+    try:
+        return dest.read_bytes() == (COMPAT_SRC / "__init__.py").read_bytes()
+    except OSError:
+        return False
+
+
+def install_compat(comfy_dir, log=None) -> bool:
+    """Copy the shim into ComfyUI/custom_nodes (if it is not there already).
+    True when it is in place."""
+    if not comfy_dir or not (Path(comfy_dir) / "main.py").exists():
+        return False
+    if compat_installed(comfy_dir):
+        return True
+    dest = Path(comfy_dir) / "custom_nodes" / COMPAT_NAME
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(COMPAT_SRC / "__init__.py", dest / "__init__.py")
+    except OSError as exc:
+        if log:
+            log(f"Could not install the wav2vec2 compatibility node: {exc}")
+        return False
+    if log:
+        log("Installed Avatar Studio's wav2vec2 compatibility node "
+            "(lip sync on transformers 5).")
+    return True
+
+
+def lipsync_ok(python: str, comfy_dir, cached: bool = False) -> bool:
+    """Will wav2vec2 give the lip sync its hidden states in this install?"""
+    return (transformers_ok(transformers_version(python, cached=cached))
+            or compat_installed(comfy_dir))
+
+
+def ensure_lipsync(python: str, comfy_dir, log, on_pct=None,
+                   should_cancel=None) -> None:
+    """The shim if it can be copied; else transformers 4.x. Raises if
+    neither, with transformers 5 installed."""
+    if install_compat(comfy_dir, log):
+        return
+    pin_transformers(python, log, on_pct, should_cancel=should_cancel)
 
 
 def torch_index(cfg: dict) -> str:
@@ -1698,8 +1763,8 @@ def run_setup(cfg: dict, prog: Progress, comfy: ComfyProcess,
                         prog.log(f"Skipped {path.name} requirements: {exc}")
             # after every requirements file: any of them can pull transformers 5
             prog.track("deps", None, "Checking transformers…")
-            pin_transformers(cfg["python"], prog.log,
-                             _pip_pct(prog, "transformers"))
+            ensure_lipsync(cfg["python"], cfg["comfy_dir"], prog.log,
+                           _pip_pct(prog, "transformers"))
             prog.finish("deps", f"Installed into {Path(cfg['python']).name}")
 
         prog.begin("models")

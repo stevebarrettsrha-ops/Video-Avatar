@@ -292,9 +292,76 @@ def run(slow: bool = False) -> Suite:
                     job["status"] == "done" and devices == ["gpu", "cpu"],
                     f"{job.get('status')} {job.get('error', '')} {devices}")
 
+    # -- the engine dies mid-render: said at once, not after five minutes --
+    with Workspace() as ws:
+        install = fake_install(ws / "app")
+        url = f"http://127.0.0.1:{free_port()}"
+        with studio(url, ws / "data", install / "models",
+                    comfy_dir=str(install), python=sys.executable,
+                    auto_start_comfy=False) as app:
+            requests.post(f"{app.url}/api/comfy/start", timeout=60)
+            wait_for(lambda: requests.get(f"{app.url}/api/status", timeout=20)
+                     .json()["ready"], timeout=60)
+            requests.post(f"{url}/delay", json={"seconds": 30}, timeout=5)
+            upload(app.url, "face.png", PNG)
+            upload(app.url, "speech.wav", WAV)
+            job_id = requests.post(f"{app.url}/api/generate", json={
+                "image": "face.png", "audio": "speech.wav",
+                "audio_seconds": 3}, timeout=20).json()["jobs"][0]
+
+            def job():
+                return next(j for j in requests.get(
+                    f"{app.url}/api/jobs", timeout=10).json()
+                    if j["id"] == job_id)
+            wait_for(lambda: "Queued" not in job().get("stage", "Queued"),
+                     30, 0.3)
+            time.sleep(1)
+            s.check("(the render is under way in the engine)",
+                    job()["status"] == "running", str(job()))
+            requests.post(f"{url}/crash", timeout=5)
+            began = time.time()
+            wait_for(lambda: job()["status"] != "running", 60, 0.3)
+            took, j = time.time() - began, job()
+            s.check("a managed engine that dies mid-render fails the job within "
+                    "seconds, with its fatal line",
+                    j["status"] == "error" and took < 15
+                    and "stopped in the middle" in j.get("error", "")
+                    and "fatal" in j.get("error", "").lower(),
+                    f"{took:.1f}s {j.get('status')} {j.get('error', '')}")
+
+    # -- the sampler also counts tensors onto the card: not steps ----------
+    with comfy(delay=3, MOCK_LOAD_TENSORS="1896") as mock, Workspace() as ws:
+        fake_weights(ws / "models")
+        with studio(mock.url, ws / "data", ws / "models") as app:
+            upload(app.url, "face.png", PNG)
+            upload(app.url, "speech.wav", WAV)
+            job_id = requests.post(f"{app.url}/api/generate", json={
+                "image": "face.png", "audio": "speech.wav",
+                "audio_seconds": 3}, timeout=20).json()["jobs"][0]
+            seen: list = []
+
+            def watch():
+                job = next(j for j in requests.get(
+                    f"{app.url}/api/jobs", timeout=10).json()
+                    if j["id"] == job_id)
+                seen.append((job.get("stage", ""), job.get("pct", 0)))
+                return job["status"] != "running"
+            wait_for(watch, 60, 0.2)
+            loading = [x for x in seen if "loading the model onto the GPU" in x[0]]
+            s.check("loading the model's 1896 tensors is named as such, never "
+                    "\"step 424 of 1896\" (what a real PC showed)",
+                    loading and not any("of 1896" in x[0] and "step" in x[0]
+                                        for x in seen), str(seen[:6]))
+            s.check("and it does not move the bar as if steps were done",
+                    all(p <= 12 for _, p in loading), str(loading[:3]))
+            s.check("the real steps are still counted",
+                    any("step 12 of 12" in x[0] or "step 11 of 12" in x[0]
+                        for x in seen) or any("step" in x[0] and "of 12" in x[0]
+                                              for x in seen), str(seen[-4:]))
+
     # -- transformers 5 in ComfyUI's Python ---------------------------------
-    # pip cannot replace it (a resolver or disk error): the engine is not
-    # started, and nothing says ready
+    # the real PC's case: pip cannot downgrade it. The compatibility node is
+    # copied in instead, pip is never run, and the engine comes up ready.
     with Workspace() as ws:
         install = fake_install(ws / "app")
         py = fake_python(ws / "py", "5.19.0", pip_ok=False)
@@ -303,9 +370,36 @@ def run(slow: bool = False) -> Suite:
                     comfy_dir=str(install), python=str(py),
                     auto_start_comfy=False) as app:
             r = requests.post(f"{app.url}/api/comfy/start", timeout=60)
+            s.check("transformers 5 with a pip that fails: the engine starts "
+                    "anyway, with the compatibility node and no pip at all",
+                    r.status_code == 200
+                    and (install / "custom_nodes" / "avatar_studio_compat"
+                         / "__init__.py").exists()
+                    and not (ws / "py" / "pip.log").exists(), r.text[:300])
+            s.check("and it is ready, because the engine has loaded the node",
+                    wait_for(lambda: requests.get(f"{app.url}/api/status",
+                                                  timeout=20).json()["ready"],
+                             timeout=60))
+            deps = requests.get(f"{app.url}/api/deps", timeout=60).json()
+            tf = next((i for i in deps["items"] if i["id"] == "transformers"), {})
+            s.check("the Engine page lists transformers 5.19 as fine, with the "
+                    "node", tf.get("state") == "ok"
+                    and "compatibility node" in tf.get("detail", ""), str(tf))
+
+    # neither fix possible (custom_nodes not writable, pip failing): the
+    # engine is not started, and nothing says ready
+    with Workspace() as ws:
+        install = fake_install(ws / "app")
+        (install / "custom_nodes").write_text("not a folder")
+        py = fake_python(ws / "py", "5.19.0", pip_ok=False)
+        url = f"http://127.0.0.1:{free_port()}"
+        with studio(url, ws / "data", install / "models",
+                    comfy_dir=str(install), python=str(py),
+                    auto_start_comfy=False) as app:
+            r = requests.post(f"{app.url}/api/comfy/start", timeout=60)
             err = r.json().get("error", "")
-            s.check("a failed transformers install refuses to start the engine, "
-                    "and says why and how to fix it",
+            s.check("with no way to fix the lip sync, the engine is not "
+                    "started, and the answer says why and how",
                     r.status_code == 409 and "transformers 5.19.0" in err
                     and "transformers>=4.50.3,<5" in err, err)
             time.sleep(3)
@@ -314,25 +408,46 @@ def run(slow: bool = False) -> Suite:
                     not st["comfy_online"] and not st["ready"]
                     and st["transformers_bad"] == "5.19.0", str(st)[:200])
 
-    # an engine already running with ComfyUI-Manager: Restart must not use the
-    # Manager's in-place reboot (same packages); it stops it, pins, starts
+    # an engine already running with ComfyUI-Manager: the node goes on disk
+    # first, so the Manager's in-place reboot loads it; no pip
     with Workspace() as ws:
         install = fake_install(ws / "app")
-        py = fake_python(ws / "py", "5.19.0")
+        py = fake_python(ws / "py", "5.19.0", pip_ok=False)
         reboots = ws / "manager.log"
         with comfy(delay=0.2, MOCK_MANAGER_LOG=str(reboots)) as outside:
             with studio(outside.url, ws / "data", install / "models",
                         comfy_dir=str(install), python=str(py),
                         auto_start_comfy=False) as app:
                 st = requests.get(f"{app.url}/api/status", timeout=20).json()
-                s.check("an engine whose Python has transformers 5 is not "
-                        "ready, and the status says which version",
+                s.check("an engine with transformers 5 and without the node "
+                        "is not ready, and the status says which version",
                         st["comfy_online"] and not st["ready"]
                         and st["transformers_bad"] == "5.19.0", str(st)[:200])
                 r = requests.post(f"{app.url}/api/comfy/restart",
                                   timeout=120).json()
-                s.check("Restart skips the Manager reboot and takes the "
-                        "engine over",
+                s.check("Restart puts the node on disk, then lets "
+                        "ComfyUI-Manager reboot the engine to load it",
+                        r.get("how") == "manager-reboot" and reboots.exists()
+                        and (install / "custom_nodes" / "avatar_studio_compat"
+                             / "__init__.py").exists()
+                        and not (ws / "py" / "pip.log").exists(), str(r))
+
+    # the same, but the node cannot be written: the Manager reboot could not
+    # fix anything, so it is skipped; the engine is stopped, 4.x installed
+    # while nothing holds the files, and a managed engine started
+    with Workspace() as ws:
+        install = fake_install(ws / "app")
+        (install / "custom_nodes").write_text("not a folder")
+        py = fake_python(ws / "py", "5.19.0")
+        reboots = ws / "manager.log"
+        with comfy(delay=0.2, MOCK_MANAGER_LOG=str(reboots)) as outside:
+            with studio(outside.url, ws / "data", install / "models",
+                        comfy_dir=str(install), python=str(py),
+                        auto_start_comfy=False) as app:
+                r = requests.post(f"{app.url}/api/comfy/restart",
+                                  timeout=120).json()
+                s.check("without the node, Restart skips the Manager reboot "
+                        "and takes the engine over",
                         r.get("how") == "takeover" and not reboots.exists(),
                         str(r))
                 s.equal("4.x was installed before the new engine started",

@@ -358,6 +358,10 @@ def _wait_prompt(job_id: str, prompt_id: str, built: dict, set_state,
             outs = [] if err else client.outputs(prompt_id)
             unreachable_since = None
         except requests.RequestException:
+            # an engine this app started, whose process has exited, is not
+            # coming back to finish: say so now, with what it last said
+            if comfy_proc.proc is not None and not comfy_proc.alive():
+                raise Failed(engine_died_message())
             # a machine paging the DiT through RAM can stall a reply past its
             # timeout; that is not a failed render. Only an engine gone for
             # minutes is.
@@ -375,7 +379,15 @@ def _wait_prompt(job_id: str, prompt_id: str, built: dict, set_state,
         took = elapsed(time.time() - started)
         where = (f" · part {built['part'] + 1} of {parts}" if parts > 1 else "")
         local = built["samplers"].get(str(wp.get("node") or ""))
-        if maximum and local is not None:
+        steps = built.get("steps") or 0
+        if maximum and local is not None and steps and maximum != steps:
+            # the sampler also reports moving the model's tensors onto the
+            # card (1896 of them for LongCat): not steps, and not progress
+            # through the clip — a real PC showed "step 424 of 1896"
+            set_state(stage=(f"Window {local + 1} of {windows} · loading the "
+                             f"model onto the GPU, {value} of {maximum}{where}"
+                             f" · {took}"))
+        elif maximum and local is not None:
             # one bar across every window of the clip: each an equal slice
             window = local                       # samplers map to the clip's
             done = (window + min(value / maximum, 1)) / windows
@@ -397,6 +409,20 @@ def _wait_prompt(job_id: str, prompt_id: str, built: dict, set_state,
             raise Failed("Nothing after two days. On a small card that is "
                          "usually paging rather than rendering — see the "
                          "preflight on the Engine page.")
+
+
+def engine_died_message() -> str:
+    """The engine's last words worth showing: a fatal error or traceback line
+    beats the progress bars that usually end the log."""
+    lines = [ln.strip() for ln in comfy_proc.tail(200) if ln.strip()]
+    keys = ("fatal", "error", "exception", "killed", "out of memory")
+    said = next((ln for ln in reversed(lines)
+                 if any(k in ln.lower() for k in keys)
+                 and not ln.startswith("[Avatar Studio]")), "")
+    return ("ComfyUI stopped in the middle of the render"
+            + (f": {said[:220]}" if said else "")
+            + ". The Engine console has the rest; press Start ComfyUI and "
+              "Generate again.")
 
 
 def _download(item: dict, dest: Path) -> None:
@@ -637,7 +663,8 @@ def api_status():
     # an engine that answers but whose Python has transformers 5 fails every
     # render in wav2vec2: not ready, and the page says why
     payload["transformers_bad"] = _transformers_bad(
-        bootstrap.comfy_python(cfg), cached=True)
+        bootstrap.comfy_python(cfg), cached=True,
+        live=client if online else None)
     if payload["transformers_bad"]:
         payload["transformers_fix"] = bootstrap.transformers_fix_command(
             bootstrap.comfy_python(cfg))
@@ -814,12 +841,21 @@ def _start_engine(py: str, port: int) -> str:
     return ""
 
 
-def _transformers_bad(py: str, cached: bool = False) -> str:
-    """The version, if ComfyUI's Python has a transformers that breaks wav2vec2."""
+def _transformers_bad(py: str, cached: bool = False, live=None) -> str:
+    """The version, if ComfyUI's Python has a transformers that breaks wav2vec2
+    and the fix is not there: with `live`, a running engine that has not
+    loaded the compatibility node; without, no node on disk."""
     if not py:
         return ""
     v = bootstrap.transformers_version(py, cached=cached)
-    return "" if bootstrap.transformers_ok(v) else v
+    if bootstrap.transformers_ok(v):
+        return ""
+    if live is not None:
+        try:
+            return "" if live.has(bootstrap.COMPAT_NODE) else v
+        except Exception:  # noqa: BLE001
+            return ""
+    return "" if bootstrap.compat_installed(cfg.get("comfy_dir")) else v
 
 
 @app.post("/api/comfy/start")
@@ -872,9 +908,12 @@ def api_comfy_restart():
         return jsonify({"ok": True, "how": "started"})
 
     # online, but not ours — take it over. ComfyUI-Manager's reboot restarts
-    # the same Python in place, so it cannot repair transformers: with 5.x,
-    # stop the process and start a managed one, which pins it first while
-    # nothing holds the files.
+    # the same Python in place: it loads the compatibility node if the node
+    # is on disk first, but cannot change packages. If the node cannot be
+    # put there and transformers is 5.x, stop the process and start a
+    # managed one, which installs 4.x first while nothing holds the files.
+    if can_start:
+        bootstrap.install_compat(cfg["comfy_dir"], _note)
     bad = _transformers_bad(py) if can_start else ""
     if bad:
         _note(f"transformers {bad} has to be replaced first — stopping the "
@@ -1332,9 +1371,11 @@ def ensure_engine_at_boot() -> None:
         reasons.append("a different install is answering the address")
     if cfg.get("lowvram", True) and bootstrap.engine_lowvram(stats) is False:
         reasons.append("it was started without low-VRAM mode (--lowvram)")
+    if _transformers_bad(py, live=client):
+        reasons.append("its transformers 5 breaks the lip sync, and it has not "
+                       "loaded the compatibility node")
+        bootstrap.install_compat(cfg["comfy_dir"], _note)
     bad = _transformers_bad(py)
-    if bad:
-        reasons.append(f"its transformers {bad} breaks the lip sync")
 
     if not reasons:
         _note(f"Adopting the ComfyUI already running at {url}.")

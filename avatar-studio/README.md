@@ -91,29 +91,30 @@ yourself. Then it does the following:
 4. Installs PyTorch and the packs' requirements.
 5. Downloads the weights, resumably, with one progress bar for the whole
    set.
-6. Keeps `transformers` below 5 in ComfyUI's Python (see below).
+6. Adds its wav2vec2 compatibility node to ComfyUI (see below).
 7. Starts ComfyUI with `--lowvram --preview-method auto`.
 
-### transformers must stay below 5
+### ComfyUI crashing mid-render on Windows
+
+The wrapper's sampler draws a small chart with matplotlib on every run. On
+Windows with Tk installed, matplotlib picked its Tk GUI backend, and ComfyUI
+died partway through a render with `Tcl_AsyncDelete: async handler deleted
+by the wrong thread`. The app now starts ComfyUI with `MPLBACKEND=Agg` (no
+GUI), and its compatibility node does the same for a ComfyUI started some
+other way. If the engine the app started does die during a render, the clip
+fails at once and quotes the engine's last fatal line.
+
+### The lip sync on transformers 5
 
 From transformers 5.0, the wav2vec2 that the lip sync uses returns no
 hidden states. Every render then stops at `MultiTalkWav2VecEmbeds: 'NoneType'
-object is not subscriptable`. ComfyUI only asks for `>=4.50.3`, so a fresh
-install gets 5.x. The app puts 4.x back (with a diffusers that agrees on
-huggingface-hub) after setup, after any node or PyTorch install, and
-**every time it starts ComfyUI**. If that install fails, ComfyUI is not
-started and the engine is not reported ready: the Engine page says why and
-gives the command. Restart ComfyUI on an engine started elsewhere stops it
-and starts a fixed one; ComfyUI-Manager's own reboot could not change its
-packages. The Engine page shows the version, with an
-Install button when it is wrong. With a ComfyUI you start yourself, run this
-in its Python:
-
-```
-python -m pip install "transformers>=4.50.3,<5" "diffusers>=0.33.0"
-```
-
-A failed or cancelled download keeps what arrived and resumes next time.
+object is not subscriptable`. A fresh ComfyUI gets 5.x. The app copies a
+small custom node of its own, `custom_nodes/avatar_studio_compat`, into
+ComfyUI before every start. It puts the 4.x behaviour back, and its output
+is identical to transformers 4.57.6. Nothing in ComfyUI's Python is
+changed, so there is no downgrade to fail. Only if the node cannot be
+written does the app install transformers 4.x instead. If neither works,
+ComfyUI is not started and the Engine page says why.
 
 ---
 
@@ -184,7 +185,7 @@ AVATAR_REAL_COMFY=http://127.0.0.1:8188 AVATAR_REAL_MODELS=/path/ComfyUI/models 
     python tests/run.py real   # against a real ComfyUI with the three packs
 ```
 
-**298 checks**, all passing, plus an out-of-the-box run from the zip (`tests/out_of_the_box.py`). See [docs/TEST_REPORT.md](docs/TEST_REPORT.md)
+**314 checks**, all passing, plus an out-of-the-box run from the zip (`tests/out_of_the_box.py`). See [docs/TEST_REPORT.md](docs/TEST_REPORT.md)
 for what each suite proves and the bugs the testing found, and
 [docs/screenshots/](docs/screenshots/) for every screen.
 

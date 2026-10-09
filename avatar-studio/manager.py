@@ -281,16 +281,22 @@ def dependencies(cfg: dict, client=None,
 
     if py_comfy:
         tv = bootstrap.transformers_version(py_comfy)
-        if tv and not bootstrap.transformers_ok(tv):
+        shim = bootstrap.compat_installed(cfg.get("comfy_dir"))
+        if tv and not bootstrap.transformers_ok(tv) and not shim:
             items.append({"id": "transformers", "label": "transformers",
                           "state": "warn",
                           "detail": f"{tv} — 5.x breaks the lip sync "
-                                    "(wav2vec2 returns nothing). Install puts "
-                                    "4.x back; then restart the engine.",
+                                    "(wav2vec2 returns nothing). Install adds "
+                                    "Avatar Studio's compatibility node; then "
+                                    "restart the engine.",
                           "action": "install"})
         elif tv:
             items.append({"id": "transformers", "label": "transformers",
-                          "state": "ok", "detail": tv})
+                          "state": "ok",
+                          "detail": tv + (" — with Avatar Studio's wav2vec2 "
+                                          "compatibility node"
+                                          if not bootstrap.transformers_ok(tv)
+                                          else "")})
 
     models_dir = Path(cfg["models_dir"]) if cfg.get("models_dir") else None
     if models_dir and models_dir.is_dir():
@@ -353,9 +359,9 @@ def install_dependency(dep_id: str, cfg: dict, opts: dict) -> Task:
                 py = comfy_python(cfg)
                 if not py:
                     raise RuntimeError("Install ComfyUI first.")
-                bootstrap.pin_transformers(py, task.log,
-                                           should_cancel=lambda: task.cancel)
-                task.set(detail="Done. Restart ComfyUI so it loads 4.x.")
+                bootstrap.ensure_lipsync(py, cfg.get("comfy_dir"), task.log,
+                                         should_cancel=lambda: task.cancel)
+                task.set(detail="Done. Restart ComfyUI so it loads the fix.")
             elif node:
                 _install_node(task, cfg, node)
             else:
@@ -417,8 +423,7 @@ def _install_node(task: Task, cfg: dict, node: dict) -> None:
         task.set(detail="Installing its requirements…")
         bootstrap.pip_install(py, ["-r", str(reqs)], task.log,
                               should_cancel=lambda: task.cancel)
-        bootstrap.pin_transformers(py, task.log,
-                                   should_cancel=lambda: task.cancel)
+        bootstrap.install_compat(comfy_dir, task.log)
     task.set(detail="Installed. Restart ComfyUI so it loads the node.")
 
 
@@ -457,8 +462,7 @@ def _install_torch(task: Task, cfg: dict, opts: dict) -> None:
     bootstrap.pip_install(str(target),
                           ["-r", str(comfy_dir / "requirements.txt")], task.log,
                           should_cancel=lambda: task.cancel)
-    bootstrap.pin_transformers(str(target), task.log,
-                               should_cancel=lambda: task.cancel)
+    bootstrap.install_compat(comfy_dir, task.log)
     task.set(detail="PyTorch installed.")
 
 

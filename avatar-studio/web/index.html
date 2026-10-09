@@ -1096,7 +1096,7 @@ function blockedFromRendering() {
           ". Download them here.", true);
   } else if (st.transformers_bad) {
     show("engine");
-    toast("transformers " + st.transformers_bad + " in ComfyUI's Python breaks the lip sync. Press Restart ComfyUI and it installs 4.x first, or press Install next to transformers below.", true);
+    toast("transformers " + st.transformers_bad + " in ComfyUI's Python breaks the lip sync. Press Restart ComfyUI: Avatar Studio adds its compatibility node first.", true);
   } else if (!st.nodes_ready) {
     show("engine");
     toast("ComfyUI is running without " + ((st.missing_nodes || []).join(", ")
@@ -1534,7 +1534,7 @@ async function pollEngineLog() {
   var st = S.status || {};
   var state;
   if (st.transformers_bad) {
-    state = "⚠ " + "transformers " + st.transformers_bad + " in ComfyUI's Python breaks the lip sync. Press Restart ComfyUI and it installs 4.x first, or press Install next to transformers below." + " By hand: " + (st.transformers_fix || "");
+    state = "⚠ " + "transformers " + st.transformers_bad + " in ComfyUI's Python breaks the lip sync. Press Restart ComfyUI: Avatar Studio adds its compatibility node first." + " Or by hand: " + (st.transformers_fix || "");
   } else if (st.stale_models && d.online) {
     state = "⚠ The weights are on disk, but this ComfyUI started before "
           + "they landed and has not rescanned. Press Restart ComfyUI.";

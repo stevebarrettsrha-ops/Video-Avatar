@@ -34,6 +34,13 @@ OBJECT_INFO = json.loads(
     (pathlib.Path(__file__).with_name("object_info.json")).read_text())
 for cls in [c for c in os.environ.get("MOCK_OMIT", "").split(",") if c]:
     OBJECT_INFO.pop(cls, None)
+# custom nodes found at startup, as a real ComfyUI lists them (fake_install's
+# main.py sets this when custom_nodes/avatar_studio_compat is there)
+for cls in [c for c in os.environ.get("MOCK_EXTRA_NODES", "").split(",") if c]:
+    OBJECT_INFO[cls] = {"input": {"required": {}}, "input_order": {"required": []},
+                        "output": [], "output_name": [], "name": cls,
+                        "display_name": cls, "category": "Avatar Studio",
+                        "output_node": False}
 if os.environ.get("MOCK_NO_MELBAND_MODEL"):
     for _cls in ("MelBandRoFormerModelLoader", "WanVideoModelLoader"):
         if _cls in OBJECT_INFO:
@@ -159,10 +166,23 @@ def _execute(pid, graph):
     # progress steps, and "executing" None marks the end
     samplers = [n for n, v in graph.items()
                 if v["class_type"] == "WanVideoSamplerv2"]
-    steps = max(1, int(DELAY * 2))
+    # the scheduler's steps, as the real sampler counts them
+    steps = next((int(v["inputs"].get("steps", 0)) for v in graph.values()
+                  if v["class_type"] == "WanVideoSchedulerv2"
+                  and isinstance(v["inputs"].get("steps"), int)), 0) \
+        or max(1, int(DELAY * 2))
+    tensors = int(os.environ.get("MOCK_LOAD_TENSORS", 0))
     for nid in sorted(graph, key=lambda n: int(n) if str(n).isdigit() else 0):
         ws_send({"type": "executing",
                  "data": {"node": nid, "prompt_id": pid}})
+        if nid in samplers and tensors:
+            # the wrapper reports moving the model onto the card through
+            # the same progress channel ("Loading transformer parameters")
+            for k in range(1, 6):
+                time.sleep(DELAY / 10)
+                ws_send({"type": "progress",
+                         "data": {"value": tensors * k // 5, "max": tensors,
+                                  "prompt_id": pid, "node": nid}})
         if nid in samplers:
             for i in range(steps):
                 time.sleep(DELAY / steps)
@@ -403,6 +423,14 @@ class H(BaseHTTPRequestHandler):
         p = self.path.split("?")[0]
         n = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(n) if n else b""
+        if p == "/crash":
+            # the process dying mid-render, as the Tk crash took a real one
+            print("Tcl_AsyncDelete: async handler deleted by the wrong thread",
+                  flush=True)
+            print("Windows fatal exception: code 0x80000003", flush=True)
+            self._send(200, {})
+            threading.Timer(0.2, lambda: os._exit(3)).start()
+            return
         if p == "/manager/reboot":
             # ComfyUI-Manager's in-place reboot: same Python, same packages
             with open(os.environ.get("MOCK_MANAGER_LOG", os.devnull), "a") as fh:
