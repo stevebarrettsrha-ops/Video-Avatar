@@ -1033,11 +1033,23 @@ class ComfyProcess:
         # anything else the person wants ComfyUI started with — --cpu on a
         # machine with no GPU, --use-sage-attention, a different cache mode
         cmd += extra
-        # an install from before the pin, or a node pack that upgraded it
+        # an install from before the pin, or a node pack that upgraded it.
+        # If 5.x stays, do not start at all: the engine would come up "ready"
+        # and every render would fail in wav2vec2.
         try:
             pin_transformers(python, prog.log)
         except Exception as exc:  # noqa: BLE001
-            prog.log(f"Could not install transformers 4.x: {exc}")
+            have = transformers_version(python)
+            if not transformers_ok(have):
+                msg = (f"ComfyUI was not started: it has transformers {have}, "
+                       "with which every render fails in the lip sync, and "
+                       f"installing 4.x failed ({str(exc)[:200]}). On the "
+                       "Engine page press Install next to transformers, or "
+                       "run: " + transformers_fix_command(python))
+                prog.log(msg)
+                self.note(msg)
+                raise TransformersBlocked(msg) from exc
+            prog.log(f"transformers check: {exc}")
         prog.log("Launching ComfyUI: " + " ".join(cmd))
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) \
             if platform.system() == "Windows" else 0
@@ -1437,14 +1449,32 @@ TRANSFORMERS_PIN = "transformers>=4.50.3,<5"
 PIN_ARGS = [TRANSFORMERS_PIN, "diffusers>=0.33.0"]
 
 
-def transformers_version(python: str) -> str:
-    """The transformers in ComfyUI's Python, without importing it ('' if none)."""
+_TF_SEEN: dict[str, str] = {}
+
+
+class TransformersBlocked(RuntimeError):
+    """transformers 5 is installed and 4.x could not be put back: every
+    render would fail in wav2vec2, so the engine is not started."""
+
+
+def transformers_version(python: str, cached: bool = False) -> str:
+    """The transformers in ComfyUI's Python, without importing it ('' if none).
+    cached=True answers from the last probe (the status poll runs often);
+    every uncached probe refreshes it."""
+    if cached and python in _TF_SEEN:
+        return _TF_SEEN[python]
     try:
         r = _run([python, "-c", "import importlib.metadata as m;"
                   "print(m.version('transformers'))"], timeout=60)
+        v = r.stdout.strip() if r.returncode == 0 else ""
     except Exception:
-        return ""
-    return r.stdout.strip() if r.returncode == 0 else ""
+        v = ""
+    _TF_SEEN[python] = v
+    return v
+
+
+def forget_transformers() -> None:
+    _TF_SEEN.clear()
 
 
 def transformers_ok(version: str) -> bool:
@@ -1454,15 +1484,28 @@ def transformers_ok(version: str) -> bool:
         return True
 
 
+def transformers_fix_command(python: str) -> str:
+    return f'"{python}" -m pip install ' + " ".join(f'"{a}"' for a in PIN_ARGS)
+
+
 def pin_transformers(python: str, log, on_pct=None, should_cancel=None) -> bool:
-    """Bring transformers back under 5 if it is not. True if it changed."""
+    """Bring transformers back under 5 if it is not. True if it changed.
+    Raises if it is still 5.x afterwards. Run it with the engine stopped: on
+    Windows a running ComfyUI holds tokenizers' .pyd, and pip cannot replace
+    it."""
     have = transformers_version(python)
     if transformers_ok(have):
         return False
     log(f"transformers {have} breaks the lip sync (wav2vec2 returns no hidden "
         "states); installing 4.x")
-    pip_install(python, PIN_ARGS, log, on_pct,
-                should_cancel=should_cancel)
+    try:
+        pip_install(python, PIN_ARGS, log, on_pct,
+                    should_cancel=should_cancel)
+    finally:
+        forget_transformers()
+    now = transformers_version(python)
+    if not transformers_ok(now):
+        raise RuntimeError(f"transformers is still {now} after the install")
     return True
 
 
@@ -1655,11 +1698,8 @@ def run_setup(cfg: dict, prog: Progress, comfy: ComfyProcess,
                         prog.log(f"Skipped {path.name} requirements: {exc}")
             # after every requirements file: any of them can pull transformers 5
             prog.track("deps", None, "Checking transformers…")
-            try:
-                pin_transformers(cfg["python"], prog.log,
-                                 _pip_pct(prog, "transformers"))
-            except Exception as exc:  # noqa: BLE001
-                prog.log(f"Could not install transformers 4.x: {exc}")
+            pin_transformers(cfg["python"], prog.log,
+                             _pip_pct(prog, "transformers"))
             prog.finish("deps", f"Installed into {Path(cfg['python']).name}")
 
         prog.begin("models")

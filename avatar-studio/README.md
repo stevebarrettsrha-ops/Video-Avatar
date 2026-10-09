@@ -101,7 +101,11 @@ hidden states. Every render then stops at `MultiTalkWav2VecEmbeds: 'NoneType'
 object is not subscriptable`. ComfyUI only asks for `>=4.50.3`, so a fresh
 install gets 5.x. The app puts 4.x back (with a diffusers that agrees on
 huggingface-hub) after setup, after any node or PyTorch install, and
-**every time it starts ComfyUI**. The Engine page shows the version, with an
+**every time it starts ComfyUI**. If that install fails, ComfyUI is not
+started and the engine is not reported ready: the Engine page says why and
+gives the command. Restart ComfyUI on an engine started elsewhere stops it
+and starts a fixed one; ComfyUI-Manager's own reboot could not change its
+packages. The Engine page shows the version, with an
 Install button when it is wrong. With a ComfyUI you start yourself, run this
 in its Python:
 
@@ -180,7 +184,7 @@ AVATAR_REAL_COMFY=http://127.0.0.1:8188 AVATAR_REAL_MODELS=/path/ComfyUI/models 
     python tests/run.py real   # against a real ComfyUI with the three packs
 ```
 
-**290 checks**, all passing, plus an out-of-the-box run from the zip (`tests/out_of_the_box.py`). See [docs/TEST_REPORT.md](docs/TEST_REPORT.md)
+**298 checks**, all passing, plus an out-of-the-box run from the zip (`tests/out_of_the_box.py`). See [docs/TEST_REPORT.md](docs/TEST_REPORT.md)
 for what each suite proves and the bugs the testing found, and
 [docs/screenshots/](docs/screenshots/) for every screen.
 

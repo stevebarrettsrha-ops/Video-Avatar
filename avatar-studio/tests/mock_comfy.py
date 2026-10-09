@@ -403,6 +403,13 @@ class H(BaseHTTPRequestHandler):
         p = self.path.split("?")[0]
         n = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(n) if n else b""
+        if p == "/manager/reboot":
+            # ComfyUI-Manager's in-place reboot: same Python, same packages
+            with open(os.environ.get("MOCK_MANAGER_LOG", os.devnull), "a") as fh:
+                fh.write("reboot\n")
+            self._send(200, {})
+            threading.Timer(0.3, lambda: os._exit(0)).start()
+            return
         if p == "/prompt":
             graph = json.loads(raw)["prompt"]
             bad = validate(graph)

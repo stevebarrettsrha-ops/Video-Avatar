@@ -290,17 +290,45 @@ def run(slow: bool = False) -> Suite:
     real_v, real_pip = bootstrap.transformers_version, bootstrap.pip_install
     try:
         bootstrap.pip_install = lambda py, args, log, *a, **k: calls.append(args)
-        bootstrap.transformers_version = lambda py: "5.19.0"
+        versions = iter(["5.19.0", "4.57.6"])     # before, after the install
+        bootstrap.transformers_version = lambda py, cached=False: next(versions)
         changed = bootstrap.pin_transformers("py", lambda m: None)
         s.check("5.19 is replaced with 4.x", changed and calls == [
             bootstrap.PIN_ARGS] and "<5" in bootstrap.TRANSFORMERS_PIN
             and any(a.startswith("diffusers") for a in bootstrap.PIN_ARGS),
             str(calls))
         calls.clear()
-        bootstrap.transformers_version = lambda py: "4.57.6"
+        versions = iter(["4.57.6"])
+        bootstrap.transformers_version = lambda py, cached=False: next(versions)
         s.check("4.57 is left alone",
                 not bootstrap.pin_transformers("py", lambda m: None)
                 and not calls)
+        # pip "succeeded" but 5.x is still there: not a quiet success
+        bootstrap.transformers_version = lambda py, cached=False: "5.19.0"
+        try:
+            bootstrap.pin_transformers("py", lambda m: None)
+            raised = ""
+        except RuntimeError as exc:
+            raised = str(exc)
+        s.check("an install that leaves 5.x behind raises", "5.19.0" in raised,
+                raised)
+
+        # and the engine is not started on it
+        def broken_pip(*a, **k):
+            raise RuntimeError("pip exited with 1")
+        bootstrap.pip_install = broken_pip
+        cp = bootstrap.ComfyProcess()
+        try:
+            cp.start("/nonexistent/python", Path("/nonexistent/ComfyUI"), 8188,
+                     bootstrap.Progress())
+            outcome = "started"
+        except bootstrap.TransformersBlocked as exc:
+            outcome = str(exc)
+        except Exception as exc:  # noqa: BLE001
+            outcome = f"launched anyway: {type(exc).__name__}"
+        s.check("a failed pin stops the engine from starting, and says how "
+                "to fix it", cp.proc is None and "not started" in outcome
+                and "transformers>=4.50.3,<5" in outcome, outcome)
     finally:
         bootstrap.transformers_version, bootstrap.pip_install = real_v, real_pip
 

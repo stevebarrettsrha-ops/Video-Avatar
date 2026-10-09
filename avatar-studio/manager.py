@@ -167,6 +167,7 @@ def _torch_probe(python: str, code: str) -> tuple[int, str]:
 
 def forget_torch() -> None:
     _TORCH_SEEN.clear()
+    bootstrap.forget_transformers()
 
 
 # --------------------------------------------------------------------------- #

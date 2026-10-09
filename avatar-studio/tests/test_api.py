@@ -15,8 +15,9 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from harness import (Suite, Workspace, comfy, fake_weights,  # noqa: E402
-                     finish_jobs, hub, studio, wait_for)
+from harness import (Suite, Workspace, comfy, fake_install,  # noqa: E402
+                     fake_python, fake_weights, finish_jobs, free_port, hub,
+                     studio, wait_for)
 
 WAV = (b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00"
        b"\x80\x3e\x00\x00\x00\x7d\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00")
@@ -290,6 +291,57 @@ def run(slow: bool = False) -> Suite:
                     "and the clip still arrives",
                     job["status"] == "done" and devices == ["gpu", "cpu"],
                     f"{job.get('status')} {job.get('error', '')} {devices}")
+
+    # -- transformers 5 in ComfyUI's Python ---------------------------------
+    # pip cannot replace it (a resolver or disk error): the engine is not
+    # started, and nothing says ready
+    with Workspace() as ws:
+        install = fake_install(ws / "app")
+        py = fake_python(ws / "py", "5.19.0", pip_ok=False)
+        url = f"http://127.0.0.1:{free_port()}"
+        with studio(url, ws / "data", install / "models",
+                    comfy_dir=str(install), python=str(py),
+                    auto_start_comfy=False) as app:
+            r = requests.post(f"{app.url}/api/comfy/start", timeout=60)
+            err = r.json().get("error", "")
+            s.check("a failed transformers install refuses to start the engine, "
+                    "and says why and how to fix it",
+                    r.status_code == 409 and "transformers 5.19.0" in err
+                    and "transformers>=4.50.3,<5" in err, err)
+            time.sleep(3)
+            st = requests.get(f"{app.url}/api/status", timeout=20).json()
+            s.check("so nothing comes up, and nothing says ready",
+                    not st["comfy_online"] and not st["ready"]
+                    and st["transformers_bad"] == "5.19.0", str(st)[:200])
+
+    # an engine already running with ComfyUI-Manager: Restart must not use the
+    # Manager's in-place reboot (same packages); it stops it, pins, starts
+    with Workspace() as ws:
+        install = fake_install(ws / "app")
+        py = fake_python(ws / "py", "5.19.0")
+        reboots = ws / "manager.log"
+        with comfy(delay=0.2, MOCK_MANAGER_LOG=str(reboots)) as outside:
+            with studio(outside.url, ws / "data", install / "models",
+                        comfy_dir=str(install), python=str(py),
+                        auto_start_comfy=False) as app:
+                st = requests.get(f"{app.url}/api/status", timeout=20).json()
+                s.check("an engine whose Python has transformers 5 is not "
+                        "ready, and the status says which version",
+                        st["comfy_online"] and not st["ready"]
+                        and st["transformers_bad"] == "5.19.0", str(st)[:200])
+                r = requests.post(f"{app.url}/api/comfy/restart",
+                                  timeout=120).json()
+                s.check("Restart skips the Manager reboot and takes the "
+                        "engine over",
+                        r.get("how") == "takeover" and not reboots.exists(),
+                        str(r))
+                s.equal("4.x was installed before the new engine started",
+                        (ws / "py" / "transformers.version").read_text(),
+                        "4.57.6")
+                s.check("and then the engine is ready",
+                        wait_for(lambda: requests.get(
+                            f"{app.url}/api/status", timeout=20)
+                            .json()["ready"], timeout=60))
 
     # -- missing weights, and the set download -----------------------------
     with comfy() as mock, hub() as hf, Workspace() as ws:

@@ -634,7 +634,15 @@ def api_status():
             cfg.get("lowvram", True)
             and bootstrap.engine_lowvram(stats) is False)
         payload["engine_managed"] = comfy_proc.alive()
-    payload["ready"] = bool(online and payload["nodes_ready"] and not missing)
+    # an engine that answers but whose Python has transformers 5 fails every
+    # render in wav2vec2: not ready, and the page says why
+    payload["transformers_bad"] = _transformers_bad(
+        bootstrap.comfy_python(cfg), cached=True)
+    if payload["transformers_bad"]:
+        payload["transformers_fix"] = bootstrap.transformers_fix_command(
+            bootstrap.comfy_python(cfg))
+    payload["ready"] = bool(online and payload["nodes_ready"] and not missing
+                            and not payload["transformers_bad"])
     return jsonify(payload)
 
 
@@ -683,7 +691,7 @@ def _note(msg: str) -> None:
     progress.log(msg)
 
 
-def take_over_port(url: str, port: int):
+def take_over_port(url: str, port: int, use_manager: bool = True):
     """Close whatever ComfyUI answers on the port.
 
     Returns ("manager-reboot", None) when ComfyUI-Manager rebooted it in
@@ -693,11 +701,13 @@ def take_over_port(url: str, port: int):
     hunt through Task Manager.
     """
     _note("This ComfyUI was not started here — taking it over.")
-    try:
-        r = requests.post(f"{url}/manager/reboot", json={}, timeout=5)
-        accepted = r.status_code in (200, 201, 204)
-    except requests.exceptions.RequestException:
-        accepted = True          # the connection dropping is the reboot
+    accepted = False
+    if use_manager:
+        try:
+            r = requests.post(f"{url}/manager/reboot", json={}, timeout=5)
+            accepted = r.status_code in (200, 201, 204)
+        except requests.exceptions.RequestException:
+            accepted = True      # the connection dropping is the reboot
     if accepted:
         deadline = time.time() + 10
         while time.time() < deadline:
@@ -792,6 +802,26 @@ def _refresh_schema_when_up() -> None:
     threading.Thread(target=wait, daemon=True).start()
 
 
+def _start_engine(py: str, port: int) -> str:
+    """Start the managed engine. Returns '' or why it was refused (transformers
+    5 that could not be replaced — see bootstrap.TransformersBlocked)."""
+    try:
+        comfy_proc.start(py, Path(cfg["comfy_dir"]), port, progress,
+                         cfg.get("lowvram", True))
+    except bootstrap.TransformersBlocked as exc:
+        return str(exc)
+    _refresh_schema_when_up()
+    return ""
+
+
+def _transformers_bad(py: str, cached: bool = False) -> str:
+    """The version, if ComfyUI's Python has a transformers that breaks wav2vec2."""
+    if not py:
+        return ""
+    v = bootstrap.transformers_version(py, cached=cached)
+    return "" if bootstrap.transformers_ok(v) else v
+
+
 @app.post("/api/comfy/start")
 def api_comfy_start():
     if comfy_online(cfg["comfy_url"]):
@@ -799,10 +829,9 @@ def api_comfy_start():
     py = bootstrap.comfy_python(cfg)
     if not cfg.get("comfy_dir") or not py:
         return jsonify({"error": "Run setup first."}), 400
-    comfy_proc.start(py, Path(cfg["comfy_dir"]),
-                     comfy_port(cfg["comfy_url"]), progress,
-                     cfg.get("lowvram", True))
-    _refresh_schema_when_up()
+    err = _start_engine(py, comfy_port(cfg["comfy_url"]))
+    if err:
+        return jsonify({"error": err}), 409
     return jsonify({"ok": True})
 
 
@@ -828,22 +857,29 @@ def api_comfy_restart():
             return jsonify({"error": "Run setup first."}), 400
         _note("Restarting the managed engine…")
         comfy_proc.stop()
-        comfy_proc.start(py, Path(cfg["comfy_dir"]), port, progress,
-                         cfg.get("lowvram", True))
-        _refresh_schema_when_up()
+        err = _start_engine(py, port)
+        if err:
+            return jsonify({"error": err}), 409
         return jsonify({"ok": True, "how": "managed"})
 
     if not comfy_online(url):
         if not can_start:
             return jsonify({"error": "Run setup first."}), 400
         _note("Starting ComfyUI…")
-        comfy_proc.start(py, Path(cfg["comfy_dir"]), port, progress,
-                         cfg.get("lowvram", True))
-        _refresh_schema_when_up()
+        err = _start_engine(py, port)
+        if err:
+            return jsonify({"error": err}), 409
         return jsonify({"ok": True, "how": "started"})
 
-    # online, but not ours — take it over
-    how, advice = take_over_port(url, port)
+    # online, but not ours — take it over. ComfyUI-Manager's reboot restarts
+    # the same Python in place, so it cannot repair transformers: with 5.x,
+    # stop the process and start a managed one, which pins it first while
+    # nothing holds the files.
+    bad = _transformers_bad(py) if can_start else ""
+    if bad:
+        _note(f"transformers {bad} has to be replaced first — stopping the "
+              "engine rather than asking ComfyUI-Manager to reboot it.")
+    how, advice = take_over_port(url, port, use_manager=not bad)
     if advice:
         return jsonify({"error": advice}), 409
     if how == "manager-reboot":
@@ -855,9 +891,9 @@ def api_comfy_restart():
                                 "own to start — run setup, or start yours "
                                 "again yourself."})
     _note("Starting a managed engine in its place…")
-    comfy_proc.start(py, Path(cfg["comfy_dir"]), port, progress,
-                     cfg.get("lowvram", True))
-    _refresh_schema_when_up()
+    err = _start_engine(py, port)
+    if err:
+        return jsonify({"error": err}), 409
     return jsonify({"ok": True, "how": "takeover"})
 
 
@@ -1266,9 +1302,7 @@ def ensure_engine_at_boot() -> None:
 
     if not comfy_online(url):
         _note("Starting ComfyUI…")
-        comfy_proc.start(py, Path(cfg["comfy_dir"]), port, progress,
-                         cfg.get("lowvram", True))
-        _refresh_schema_when_up()
+        _start_engine(py, port)          # a refusal is noted in the console
         return
 
     # something already answers — decide between adopting and replacing
@@ -1298,6 +1332,9 @@ def ensure_engine_at_boot() -> None:
         reasons.append("a different install is answering the address")
     if cfg.get("lowvram", True) and bootstrap.engine_lowvram(stats) is False:
         reasons.append("it was started without low-VRAM mode (--lowvram)")
+    bad = _transformers_bad(py)
+    if bad:
+        reasons.append(f"its transformers {bad} breaks the lip sync")
 
     if not reasons:
         _note(f"Adopting the ComfyUI already running at {url}.")
@@ -1309,7 +1346,7 @@ def ensure_engine_at_boot() -> None:
         return
     _note("The engine already running is no use as it stands — "
           + "; ".join(reasons) + ". Replacing it.")
-    how, advice = take_over_port(url, port)
+    how, advice = take_over_port(url, port, use_manager=not bad)
     if advice:
         _note(advice)
         return
@@ -1317,9 +1354,7 @@ def ensure_engine_at_boot() -> None:
         _refresh_schema_when_up()
         return
     _note("Starting a managed engine in its place…")
-    comfy_proc.start(py, Path(cfg["comfy_dir"]), port, progress,
-                     cfg.get("lowvram", True))
-    _refresh_schema_when_up()
+    _start_engine(py, port)
 
 
 def boot() -> None:

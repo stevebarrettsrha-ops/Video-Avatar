@@ -63,7 +63,12 @@
     wav2vec2 gets `hidden_states=None` and MultiTalkWav2VecEmbeds fails
     ("'NoneType' object is not subscriptable"), as on the first real PC.
     `bootstrap.pin_transformers` (with diffusers, so huggingface-hub agrees)
-    runs after setup, node/PyTorch installs, and before every engine start.
+    runs after setup, node/PyTorch installs, and before every engine start,
+    with the engine stopped (Windows locks tokenizers' .pyd). If 5.x stays,
+    `ComfyProcess.start` raises `TransformersBlocked` and launches nothing,
+    and `/api/status` is not ready (`transformers_bad`). Every start goes
+    through `server._start_engine`. A takeover of an engine whose Python has
+    5.x skips ComfyUI-Manager's reboot: that restarts the same packages.
 15. **umT5 reads the prompt on the GPU in fp8 by default.** On the CPU (bf16)
     it took 5½ minutes on an RTX 4060 PC. A CUDA OOM in
     WanVideoTextEncodeCached is retried once with `t5_cpu` (run_job).

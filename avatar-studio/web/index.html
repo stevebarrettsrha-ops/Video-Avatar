@@ -1094,6 +1094,9 @@ function blockedFromRendering() {
     show("models");
     toast("Weights missing: " + st.missing_models.join(", ") +
           ". Download them here.", true);
+  } else if (st.transformers_bad) {
+    show("engine");
+    toast("transformers " + st.transformers_bad + " in ComfyUI's Python breaks the lip sync. Press Restart ComfyUI and it installs 4.x first, or press Install next to transformers below.", true);
   } else if (!st.nodes_ready) {
     show("engine");
     toast("ComfyUI is running without " + ((st.missing_nodes || []).join(", ")
@@ -1530,7 +1533,9 @@ async function pollEngineLog() {
   }
   var st = S.status || {};
   var state;
-  if (st.stale_models && d.online) {
+  if (st.transformers_bad) {
+    state = "⚠ " + "transformers " + st.transformers_bad + " in ComfyUI's Python breaks the lip sync. Press Restart ComfyUI and it installs 4.x first, or press Install next to transformers below." + " By hand: " + (st.transformers_fix || "");
+  } else if (st.stale_models && d.online) {
     state = "⚠ The weights are on disk, but this ComfyUI started before "
           + "they landed and has not rescanned. Press Restart ComfyUI.";
   } else if (st.engine_mismatch && d.online) {
@@ -1884,9 +1889,11 @@ async function refreshStatus() {
     : st.ready ? "Engine ready"
     : !st.comfy_online ? "Engine offline"
     : !st.nodes_ready ? "Nodes missing"
+    : st.transformers_bad ? "Fix transformers"
     : (st.missing_models || []).length ? "Weights missing" : "Engine loading";
   $("modelsTag").hidden = !(st.missing_models && st.missing_models.length);
-  $("engineTag").hidden = !!(st.comfy_online && st.nodes_ready);
+  $("engineTag").hidden = !!(st.comfy_online && st.nodes_ready
+                              && !st.transformers_bad);
   syncBusy();
   if (st.attentions && st.attentions.length) {
     var a = $("attn-sel"), want = a.dataset.want || a.value || "sdpa";
