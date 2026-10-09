@@ -234,6 +234,9 @@ def run(slow: bool = False) -> Suite:
             page.wait_for_selector("#dep-list .fitem", timeout=60000)
             s.check("the Engine page lists the node packs",
                     "ComfyUI-WanVideoWrapper" in page.locator("#dep-list").inner_text())
+            with page.expect_request(lambda req: "/api/deps?recheck=1" in req.url):
+                page.click("#btnRecheck")
+            s.check("Recheck explicitly requests another location check", True)
             page.click('.nav[data-view="library"]')
             s.check("the library shows the clip",
                     page.locator("#libGrid .tile").count() >= 1)

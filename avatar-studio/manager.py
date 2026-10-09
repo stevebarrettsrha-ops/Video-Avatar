@@ -500,7 +500,8 @@ def hf_browse(cfg: dict, repo: str, revision: str = "main") -> dict:
         folder = guess_folder(f["path"], repo)
         name = Path(f["path"]).name
         out.append({**f, "folder": folder, "name": name,
-                    "installed": bool(root and (root / folder / name).exists()),
+                    "installed": bool(root and bootstrap.usable_model(
+                        model_path(root, {"folder": folder, "name": name}, cfg))),
                     "inset": name in wanted})
     out.sort(key=lambda f: (not f["inset"], -f["size"]))
     return {"repo": repo, "revision": revision, "files": out}
@@ -512,7 +513,7 @@ def hf_download(cfg: dict, repo: str, path: str, folder: str = "") -> Task:
     root = Path(cfg["models_dir"])
     folder = folder if folder in MODEL_FOLDERS else guess_folder(path, repo)
     name = Path(path).name
-    dest = root / folder / name
+    dest = model_path(root, {"folder": folder, "name": name}, cfg)
     if any(t.meta.get("dest") == str(dest) for t in TASKS.running("download")):
         raise RuntimeError(f"{name} is already downloading.")
 
@@ -613,7 +614,7 @@ def delete_lora(cfg: dict, name: str) -> None:
 def curated(cfg: dict) -> dict:
     """The weight set, with what is on disk, and the memory precision."""
     root = Path(cfg["models_dir"]) if cfg.get("models_dir") else None
-    items = [{**m, "installed": bool(root) and model_path(root, m).exists()}
+    items = [{**m, "installed": bool(root) and bootstrap.usable_model(model_path(root, m, cfg))}
              for m in model_set(cfg) + bootstrap.extra_models(cfg)]
     required = [i for i in items if i["role"] == "required"]
     return {"precision": cfg.get("precision", "fp8"),

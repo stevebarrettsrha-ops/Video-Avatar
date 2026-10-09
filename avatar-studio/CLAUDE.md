@@ -109,13 +109,20 @@ hand-written schema.
 
 The config keeps absolute paths, which go stale the moment the app folder is
 moved, renamed or re-extracted — and then everything reads "missing" though
-it is all on disk. `bootstrap.verify_locations()` runs at every start (in the
-boot thread, before the engine is launched) and on every Recheck
-(`/api/deps`): `heal_paths()` rebases a stale path onto the app's current
-folder, and if ComfyUI is still nowhere, `find_comfy_installs()` walks the
-drives breadth-first under a time budget, and `pick_comfy()` prefers the
-install holding the LongCat weights. While it walks, `/api/deps` reports
-`searching` and the page re-polls. `AVATAR_STUDIO_NO_SEARCH=1` (set by every
+it is all on disk. `bootstrap.verify_locations()` checks the exact saved
+paths at start. Only a missing location triggers relocation: `heal_paths()`
+tries the moved app folder, then `find_comfy_installs()` searches under a
+time budget. A failed attempt is saved and does not repeat on polls or
+restarts. Engine Recheck (`/api/deps?recheck=1`) explicitly permits another
+attempt. `pick_comfy()` prefers the install holding the LongCat weights.
+While it walks, `/api/deps` reports `searching` and the page re-polls.
+Model discovery likewise saves exact verified paths (including nested
+folders and `extra_model_paths.yaml`) and searches again only when a saved
+file disappears or Recheck is pressed. A small custom node registers
+Settings' shared models folder with the local engine without rewriting the
+person's YAML or copying weights. Incomplete safetensors and LFS pointers
+do not count as installed; this is not a model identity/checksum check.
+`AVATAR_STUDIO_NO_SEARCH=1` (set by every
 test that starts the server) turns it off: test configs name made-up folders
 on purpose.
 

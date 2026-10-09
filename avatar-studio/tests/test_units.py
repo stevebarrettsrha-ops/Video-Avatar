@@ -437,7 +437,8 @@ def run(slow: bool = False) -> Suite:
         for m in bootstrap.model_set(wcfg):
             p = bootstrap.model_path(rich / "models", m)
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_bytes(b"")
+            from harness import tiny_safetensors
+            p.write_bytes(tiny_safetensors())
         s.equal("the install holding the LongCat weights is the one chosen",
                 bootstrap.pick_comfy(found, wcfg), rich)
         real_find = bootstrap.find_comfy_installs

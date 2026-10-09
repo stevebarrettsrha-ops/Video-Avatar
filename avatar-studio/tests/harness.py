@@ -236,13 +236,22 @@ def hub() -> Server:
                   port, "/mock/log")
 
 
+def tiny_safetensors(size: int = 256) -> bytes:
+    """A structural fixture with one byte tensor, not random/corrupt weights."""
+    header = json.dumps({"fixture": {"dtype": "U8", "shape": [size - 136],
+                                    "data_offsets": [0, size - 136]}}).encode()
+    if len(header) > 128 or size < 136:
+        raise ValueError("fixture size is too small")
+    return (128).to_bytes(8, "little") + header.ljust(128, b" ") + bytes(size - 136)
+
+
 def fake_weights(models_dir: Path) -> None:
     """Drop the weight files where missing_models() looks for them."""
     for folder, names in WEIGHTS.items():
         for name in names:
             path = models_dir / folder / name
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b"\x00" * 16)
+            path.write_bytes(tiny_safetensors())
 
 
 def studio(comfy_url: str, data: Path, models_dir: Path | None = None,

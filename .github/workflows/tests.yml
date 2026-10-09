@@ -29,4 +29,12 @@ jobs:
         with:
           node-version: '22'
       - run: python -m pip install -r requirements.txt
-      - run: python tests/run.py gate units memory graph api stress
+      - run: python tests/run.py gate units memory reuse location_checks graph api stress
+      - name: Install browser test dependencies
+        if: matrix.python == '3.10'
+        run: |
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Browser checks, including explicit Recheck
+        if: matrix.python == '3.10'
+        run: python tests/run.py ui

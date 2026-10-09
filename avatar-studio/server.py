@@ -26,7 +26,7 @@ from flask import Flask, jsonify, request, send_file, send_from_directory
 import bootstrap
 import manager
 from bootstrap import (APP_DIR, ComfyProcess, Progress, comfy_online,
-                       comfy_port, detect_comfy_dirs, load_config, normal_url,
+                       comfy_port, load_config, normal_url,
                        save_config)
 import comfy
 from comfy import DEFAULT_SIZE, SIZES, ComfyClient, ComfyError
@@ -49,12 +49,6 @@ progress = Progress()
 # set while the start-up search walks the drives, so the Engine page says
 # "searching" instead of "missing" and Recheck does not start a second walk
 locating = threading.Event()
-# When the last search ended. The page re-polls while "searching"; a poll
-# right after a fruitless search must show "not found" (and Install), not
-# start the next walk of the drives — so Recheck searches again only after
-# this rest.
-_search_done = [float("-inf")]
-SEARCH_REST = 30.0
 _locate_lock = threading.Lock()
 
 
@@ -63,7 +57,7 @@ def _say(msg: str) -> None:
     print(f"[avatar-studio] {msg}", flush=True)
 
 
-def _heal(search: bool = False) -> None:
+def _heal(search: bool = False, force: bool = False) -> None:
     """Verify the saved locations; repair any that moved.
 
     Without `search` only the quick repair runs (a moved app folder). With it,
@@ -80,17 +74,20 @@ def _heal(search: bool = False) -> None:
     try:
         if search:
             locating.set()
-        notes = bootstrap.verify_locations(cfg, search=search, log=_say)
-        if notes:
-            save_config(cfg)
-            for n in notes:
-                _say(n)
-        if search:
+        before = json.dumps(cfg, sort_keys=True)
+        notes = bootstrap.verify_locations(cfg, search=search, log=_say,
+                                           force=force)
+        for n in notes:
+            _say(n)
+        if search or force:
             for line in bootstrap.location_report(cfg):
                 _say("Verified " + line)
+        # Failure stamps and model lookup results matter even without a
+        # relocated path: retain them across launches, including empty results.
+        if json.dumps(cfg, sort_keys=True) != before:
+            save_config(cfg)
     finally:
         if search:
-            _search_done[0] = time.monotonic()
             # only the search owns the flag: a quick repair finishing ahead
             # of a queued search must not read as "search done"
             locating.clear()
@@ -98,12 +95,7 @@ def _heal(search: bool = False) -> None:
 
 
 def _needs_search() -> bool:
-    d = cfg.get("comfy_dir")
-    return not (d and (Path(d) / "main.py").exists())
-
-
-def _rested() -> bool:
-    return time.monotonic() - _search_done[0] > SEARCH_REST
+    return bootstrap.locations_need_search(cfg)
 
 
 _heal()
@@ -623,7 +615,8 @@ def api_status():
         "comfy_online": online,
         "setup_complete": bool(cfg.get("setup_complete")),
         "missing_models": missing,
-        "detected": detect_comfy_dirs(),
+        "detected": [cfg["comfy_dir"]] if cfg.get("comfy_dir") and
+                    Path(cfg["comfy_dir"], "main.py").is_file() else [],
         "precisions": {k: {"label": v["label"], "note": v["note"]}
                        for k, v in bootstrap.PRECISIONS.items()},
         "sizes": list(SIZES),
@@ -835,8 +828,8 @@ def _start_engine(py: str, port: int) -> str:
     5 that could not be replaced — see bootstrap.TransformersBlocked)."""
     try:
         comfy_proc.start(py, Path(cfg["comfy_dir"]), port, progress,
-                         cfg.get("lowvram", True))
-    except bootstrap.TransformersBlocked as exc:
+                         cfg.get("lowvram", True), cfg.get("models_dir", ""), cfg)
+    except (bootstrap.TransformersBlocked, RuntimeError) as exc:
         return str(exc)
     _refresh_schema_when_up()
     return ""
@@ -914,6 +907,10 @@ def api_comfy_restart():
     # put there and transformers is 5.x, stop the process and start a
     # managed one, which installs 4.x first while nothing holds the files.
     if can_start:
+        try:
+            bootstrap.install_model_paths(cfg)
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 409
         bootstrap.install_compat(cfg["comfy_dir"], _note)
     bad = _transformers_bad(py) if can_start else ""
     if bad:
@@ -967,8 +964,8 @@ def api_config():
 @app.get("/api/deps")
 def api_deps():
     if not locating.is_set():
-        _heal()
-        if _needs_search() and _rested() and \
+        _heal(force=request.args.get("recheck") == "1")
+        if _needs_search() and \
                 os.environ.get("AVATAR_STUDIO_NO_SEARCH") != "1":
             # Recheck with ComfyUI still nowhere: search the drives, in the
             # background — the page polls and the row says "searching"
@@ -1336,6 +1333,11 @@ def ensure_engine_at_boot() -> None:
         return
     py = bootstrap.comfy_python(cfg)
     if not cfg.get("comfy_dir") or not py:
+        return
+    try:
+        bootstrap.install_model_paths(cfg)
+    except RuntimeError as exc:
+        _note(str(exc))
         return
     url = cfg["comfy_url"]
     port = comfy_port(url)
