@@ -483,7 +483,8 @@ def run_job(job_id: str, params: dict) -> None:
                                     started)
             except Failed as exc:
                 # umT5 in fp8 needs ~6.7 GB free; a card that also drives
-                # the desktop may not have it. The CPU always fits.
+                # the desktop may not have it. CPU fallback needs enough
+                # host RAM; the wrapper CPU-load fix is installed at start.
                 if params.get("t5_cpu") or not str(exc).startswith(
                         "WanVideoTextEncodeCached: out of memory"):
                     raise

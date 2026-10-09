@@ -621,7 +621,9 @@ class ComfyClient:
                 "nb": {"names": ["use_non_blocking"],
                        "value": bool(p.get("non_blocking", False))},
                 "vace": {"names": ["vace_blocks_to_swap"], "value": 0},
-                "prefetch": {"names": ["prefetch_blocks"], "value": 1},
+                # Prefetch holds an extra transformer block on CUDA. The
+                # conservative default gives that headroom to activations.
+                "prefetch": {"names": ["prefetch_blocks"], "value": 0},
                 "debug": {"names": ["block_swap_debug"], "value": False}})
             loader_wanted["swap"] = {"names": ["block_swap_args"],
                                      "value": ["1", 0]}

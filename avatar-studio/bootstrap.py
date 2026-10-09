@@ -1538,11 +1538,70 @@ def compat_installed(comfy_dir) -> bool:
         return False
 
 
+def fix_t5_cpu_loading(comfy_dir, log=None) -> bool:
+    """Repair the known wrapper call that loads T5 on CUDA in CPU mode.
+
+    Only replace that call's literal third argument, located with the AST.
+    Keep the original alongside it; never rewrite unfamiliar upstream code.
+    This must run before ComfyUI imports the wrapper (restart an old engine).
+    """
+    import ast
+    import hashlib
+    path = Path(comfy_dir) / "custom_nodes" / "ComfyUI-WanVideoWrapper" / "nodes.py"
+    if not path.is_file():
+        return False
+    try:
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        for cls in tree.body:
+            if not isinstance(cls, ast.ClassDef) or cls.name != "WanVideoTextEncodeCached":
+                continue
+            for call in ast.walk(cls):
+                if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                        and call.func.attr == "loadmodel" and len(call.args) >= 3
+                        and isinstance(call.func.value, ast.Call)
+                        and isinstance(call.func.value.func, ast.Name)
+                        and call.func.value.func.id == "LoadWanVideoT5TextEncoder"):
+                    continue
+                arg = call.args[2]
+                replacement = '"offload_device" if device == "cpu" else "main_device"'
+                if ast.dump(arg) == ast.dump(ast.parse(replacement, mode="eval").body):
+                    return True
+                if not isinstance(arg, ast.Constant) or arg.value != "main_device":
+                    continue
+                # AST columns are UTF-8 byte offsets, not character offsets.
+                rows = source.encode("utf-8").splitlines(keepends=True)
+                start = sum(map(len, rows[:arg.lineno - 1])) + arg.col_offset
+                end = sum(map(len, rows[:arg.end_lineno - 1])) + arg.end_col_offset
+                raw = source.encode("utf-8")
+                fixed = raw[:start] + replacement.encode() + raw[end:]
+                compile(fixed, str(path), "exec")
+                digest = hashlib.sha256(raw).hexdigest()[:12]
+                backup = path.with_suffix(f".py.avatar-studio-original-{digest}")
+                if not backup.exists():
+                    backup.write_bytes(raw)
+                temp = path.with_suffix(".py.avatar-studio-tmp")
+                temp.write_bytes(fixed)
+                temp.replace(path)
+                if log:
+                    log("Fixed CPU text encoding: T5 now loads off the GPU. "
+                        "The original wrapper file is saved beside nodes.py.")
+                return True
+        if log:
+            log("T5 CPU-load fix: wrapper code differs; left it unchanged. "
+                "CPU fallback has not been verified for this version.")
+    except (OSError, SyntaxError, ValueError) as exc:
+        if log:
+            log(f"Could not apply the T5 CPU-load fix: {exc}")
+    return False
+
+
 def install_compat(comfy_dir, log=None) -> bool:
     """Copy the shim into ComfyUI/custom_nodes (if it is not there already).
     True when it is in place."""
     if not comfy_dir or not (Path(comfy_dir) / "main.py").exists():
         return False
+    fix_t5_cpu_loading(comfy_dir, log)
     if compat_installed(comfy_dir):
         return True
     dest = Path(comfy_dir) / "custom_nodes" / COMPAT_NAME

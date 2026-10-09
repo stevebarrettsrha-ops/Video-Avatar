@@ -27,6 +27,7 @@ sys.path.insert(0, str(HERE))
 MODULES = [
     ("gate", "the checks CLAUDE.md asks for after any edit"),
     ("units", "the frame maths and the model set, against the workflow's own numbers"),
+    ("memory", "CPU fallback loading and safe compatibility repair"),
     ("graph", "the prompts built from ComfyUI's own schema"),
     ("api", "the HTTP surface, end to end against a mock ComfyUI"),
     ("stress", "fuzzed bodies, concurrency, damaged files, hostile paths"),
