@@ -918,7 +918,9 @@ function syncBusy() {
   var busy = S.uploading > 0;
   $("btnGenerate").disabled = busy;
   $("genLabel").textContent = busy ? "Uploading…"
-    : (S.status && !S.status.ready ? "Set up" : "Generate");
+    : !(S.status && !S.status.ready) ? "Generate"
+    : (S.status.comfy_online && S.status.schema_error) ? "Engine busy"
+    : "Set up";
 }
 async function uploadFile(file, name) {
   var fd = new FormData();
@@ -1123,6 +1125,9 @@ function blockedFromRendering() {
   } else if (st.transformers_bad) {
     show("engine");
     toast("transformers " + st.transformers_bad + " in ComfyUI's Python breaks the lip sync. Press Restart ComfyUI: Avatar Studio adds its compatibility node first.", true);
+  } else if (st.schema_error) {
+    toast("ComfyUI answers but is too busy to list its nodes — probably "
+          + "loading a model. Try again in a moment.", true);
   } else if (!st.nodes_ready) {
     show("engine");
     toast("ComfyUI is running without " + ((st.missing_nodes || []).join(", ")
@@ -1931,11 +1936,13 @@ async function refreshStatus() {
     stale ? "Restart the engine"
     : st.ready ? "Engine ready"
     : !st.comfy_online ? "Engine offline"
+    : st.schema_error ? "Engine busy"
     : !st.nodes_ready ? "Nodes missing"
     : st.transformers_bad ? "Fix transformers"
     : (st.missing_models || []).length ? "Weights missing" : "Engine loading";
   $("modelsTag").hidden = !(st.missing_models && st.missing_models.length);
-  $("engineTag").hidden = !!(st.comfy_online && st.nodes_ready
+  $("engineTag").hidden = !!(st.comfy_online
+                              && (st.nodes_ready || st.schema_error)
                               && !st.transformers_bad);
   syncBusy();
   if (st.attentions && st.attentions.length) {

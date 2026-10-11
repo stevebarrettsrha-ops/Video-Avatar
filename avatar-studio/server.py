@@ -360,6 +360,7 @@ def _wait_prompt(job_id: str, prompt_id: str, built: dict, set_state,
     steps = built.get("steps") or 0
     loaded: set[int] = set()        # windows that moved the model onto the card
     unreachable_since = None
+    where = (f" · part {built['part'] + 1} of {parts}" if parts > 1 else "")
     while True:
         time.sleep(1.0)
         with jobs_lock:
@@ -379,11 +380,24 @@ def _wait_prompt(job_id: str, prompt_id: str, built: dict, set_state,
                 raise Failed(engine_died_message())
             # a machine paging the DiT through RAM can stall a reply past its
             # timeout; that is not a failed render. Only an engine gone for
-            # minutes is.
+            # minutes is: five for one this app cannot see, half an hour
+            # for a process it started that is still running, whose death
+            # ends the wait at once. Meanwhile the card says so and keeps
+            # its clock, instead of freezing on the last count (a real PC
+            # sat on "1551 of 1896").
             unreachable_since = unreachable_since or time.time()
-            if time.time() - unreachable_since > 300:
-                raise Failed("ComfyUI stopped answering for five minutes. "
-                             "Check the Engine page.")
+            quiet = time.time() - unreachable_since
+            alive = comfy_proc.proc is not None and comfy_proc.alive()
+            if quiet > bootstrap.engine_wait_limit(alive):
+                raise Failed("ComfyUI stopped answering for "
+                             + ("half an hour" if alive else "five minutes")
+                             + ". Check the Engine page.")
+            set_state(stage=(("Stop pressed — waiting for ComfyUI to answer"
+                              if cancelled else "ComfyUI is not answering")
+                             + f" ({elapsed(quiet)}"
+                             + (", it is alive and probably paging the model "
+                                "through RAM" if alive else "") + ")"
+                             + f"{where} · {elapsed(time.time() - started)}"))
             continue
         if err:
             raise Failed(err)
@@ -392,7 +406,6 @@ def _wait_prompt(job_id: str, prompt_id: str, built: dict, set_state,
         wp = ws_progress.get(prompt_id) or {}
         value, maximum = wp.get("value", 0), wp.get("max", 0)
         took = elapsed(time.time() - started)
-        where = (f" · part {built['part'] + 1} of {parts}" if parts > 1 else "")
         local = built["samplers"].get(str(wp.get("node") or ""))
         with jobs_lock:
             was = jobs[job_id].get("pct") or 0   # the bar never walks backwards
@@ -689,14 +702,20 @@ def api_status():
             payload["quantizations"] = client.quantizations()
         except Exception as exc:  # noqa: BLE001
             payload["schema_error"] = str(exc)
+        # an engine that answers its ping but not its node list is busy
+        # (moving the model), not broken: the last schema still stands
+        # in, and nothing below reads its silence as missing anything
+        payload["schema_stale"] = client.schema_stale
+        payload["engine_busy"] = bool(client.schema_stale
+                                      or payload.get("schema_error"))
         # The two silent "nothing works" states, named. ComfyUI scans its
         # model folders once, at startup: weights that landed later are on
         # disk yet absent from its lists until a restart. And an address can
         # be answered by a different install than the one set up here.
         payload["stale_models"] = bool(
             not missing and models_dir and models_dir.is_dir()
-            and not any("longcat" in u.lower()
-                        for u in payload.get("dits") or []))
+            and payload.get("dits") is not None
+            and not any("longcat" in u.lower() for u in payload["dits"]))
         stats = bootstrap.comfy_stats(cfg["comfy_url"]) or {}
         payload["engine_argv"] = (stats.get("argv") or [""])[0]
         payload["engine_mismatch"] = bootstrap.engine_foreign(

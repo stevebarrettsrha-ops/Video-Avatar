@@ -7,6 +7,7 @@ install's library or config.
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -389,6 +390,67 @@ def run(slow: bool = False) -> Suite:
                     "the clip records it",
                     (swap["blocks_to_swap"], done["images"][0]["blocks_to_swap"]),
                     (30, 30))
+
+    # -- an engine too busy to answer: the last schema serves, the card ------
+    # keeps its clock. A real PC's status read "Restart the engine" and
+    # its card froze on "1551 of 1896" while the engine moved the model
+    # and missed its heavy replies; the ping still answered.
+    os.environ["AVATAR_SCHEMA_TTL"] = "1"
+    try:
+        with comfy(delay=5) as mock, Workspace() as ws:
+            fake_weights(ws / "models")
+            with studio(mock.url, ws / "data", ws / "models") as app:
+                a = app.url
+                upload(a, "face.png", PNG)
+                upload(a, "speech.wav", WAV)
+                st = requests.get(f"{a}/api/status", timeout=20).json()
+                s.check("ready before the engine gets busy", st["ready"])
+                job_id = requests.post(f"{a}/api/generate", json={
+                    "image": "face.png", "audio": "speech.wav",
+                    "audio_seconds": 3}, timeout=20).json()["jobs"][0]
+                requests.post(f"{mock.url}/busy", json={"on": True}, timeout=5)
+                time.sleep(1.5)                     # past the schema's trust
+                st = requests.get(f"{a}/api/status", timeout=20).json()
+                keys = ("ready", "schema_stale", "engine_busy", "stale_models",
+                        "nodes_ready")
+                s.check("a failed schema read serves the last one: still ready "
+                        "and busy, never \"Restart the engine\" or \"Nodes "
+                        "missing\"",
+                        st["ready"] and st["schema_stale"] and st["engine_busy"]
+                        and not st["stale_models"] and st["nodes_ready"],
+                        str({k: st.get(k) for k in keys}))
+                seen: list = []
+
+                def quiet():
+                    job = next(j for j in requests.get(
+                        f"{a}/api/jobs", timeout=10).json() if j["id"] == job_id)
+                    seen.append((job.get("stage", ""), job["status"]))
+                    return "not answering" in job.get("stage", "")
+                s.check("the card says the engine is not answering, with its "
+                        "clock, instead of freezing on the last count",
+                        wait_for(quiet, 15, 0.2) and seen[-1][1] == "running",
+                        str(seen[-3:]))
+                requests.post(f"{mock.url}/busy", json={"on": False}, timeout=5)
+                job = next(j for j in finish_jobs(a) if j["id"] == job_id)
+                s.equal("and the render finishes once it answers again",
+                        job["status"], "done")
+                # nothing to fall back on: an upload has just forgotten the
+                # schema (uploads invalidate it)
+                requests.post(f"{mock.url}/busy", json={"on": True}, timeout=5)
+                upload(a, "face2.png", PNG)
+                st = requests.get(f"{a}/api/status", timeout=20).json()
+                s.check("with no schema to fall back on the status says busy, "
+                        "not stale models or missing nodes",
+                        not st["ready"] and st.get("schema_error")
+                        and st["engine_busy"] and not st["stale_models"],
+                        str({k: st.get(k) for k in keys + ("schema_error",)}))
+                requests.post(f"{mock.url}/busy", json={"on": False}, timeout=5)
+                st = requests.get(f"{a}/api/status", timeout=20).json()
+                s.check("and is ready again when the engine answers",
+                        st["ready"] and not st["engine_busy"],
+                        str({k: st.get(k) for k in keys}))
+    finally:
+        os.environ.pop("AVATAR_SCHEMA_TTL", None)
 
     # -- transformers 5 in ComfyUI's Python ---------------------------------
     # the real PC's case: pip cannot downgrade it. The compatibility node is

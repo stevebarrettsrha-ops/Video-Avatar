@@ -105,6 +105,19 @@
     window's slice of the bar and its steps fill the rest; the bar never
     walks backwards, so the pre-sampling creep stops at what the first
     window's first step is worth. The mock engine replays the zeroing.
+18. **A busy engine is not a broken one.** Moving the model, the engine
+    answers its ping (`comfy_online`) but can miss `/object_info` and
+    `/history` replies: a real PC's status read "Restart the engine" and
+    "Set up" mid-load, and its card froze on "1551 of 1896". A failed
+    schema refresh serves the last schema (`ComfyClient.schema_stale`,
+    asked again in a minute; a forced read or none to fall back on still
+    raises), `stale_models` needs a read `dits`, and with no schema at all
+    the status says `engine_busy`/`schema_error` and the page "Engine
+    busy". A job whose engine answers nothing keeps its clock and says so
+    on the card; it fails after `engine_wait_limit`: five minutes for an
+    engine this app cannot see, half an hour for a live managed process,
+    whose death still fails it at once. The mock's `POST /busy` is that
+    engine.
 
 ## Graceful degradation
 

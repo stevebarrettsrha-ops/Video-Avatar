@@ -199,6 +199,15 @@ The same run turned up two smaller problems:
   window's slice, the steps fill the rest, and the bar never walks
   backwards. The mock engine replays the zeroing, and the api suite checks
   the count, the wording, and that the bar only ever rises.
+- **"Restart the engine", "Set up", and a card frozen on "1551 of 1896".**
+  Moving the model, the engine answered its ping but missed its node-list
+  and history replies. The status read the missing node list as stale
+  models and missing nodes, and the job's poll, failing, stopped updating
+  the card. A failed schema refresh now serves the last schema and the
+  status says busy; the card keeps its clock and says the engine is not
+  answering; and a live engine this app started gets half an hour of that,
+  not five minutes, since its death is caught at once. The mock engine has
+  a busy switch, and the api and browser suites exercise it.
 
 ## Out of the box: the shipped zip, start to finish
 
