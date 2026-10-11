@@ -9,7 +9,8 @@
   a source-hashed backup, and leaves unfamiliar upstream code untouched with
   a console message. The fix was also checked against current upstream source.
 - Transformer block prefetch defaults to zero so an extra block does not
-  consume space needed for activations on a small card.
+  consume space needed for activations on a small card. It and pinned
+  (non-blocking) transfers are Settings since, for cards with room.
 - Unsupported fit guarantees have been qualified. CPU T5 still needs host
   RAM; changing its execution device does not eliminate the model weights.
 - Second pass: preflight now budgets cached video-model weights and CPU T5

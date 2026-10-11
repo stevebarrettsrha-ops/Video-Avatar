@@ -562,6 +562,13 @@
   <div class="orow"><span class="lab">Block swap</span><div class="ctl"><div class="slider">
     <input type="range" id="swap-sl" min="0" max="48" step="1" value="40">
     <span class="v" id="swapVal">40 / 48</span></div></div></div>
+  <div class="orow"><span class="lab">Block prefetch</span><div class="ctl"><div class="slider">
+    <input type="range" id="prefetch-sl" min="0" max="4" step="1" value="0" title="Copies the next swapped block onto the card while the current one computes. 1 usually recovers most of the speed block swap costs, for one more block of VRAM (about 0.3 GB in fp8).">
+    <span class="v" id="prefetchVal">0</span></div></div></div>
+  <div class="orow"><span class="lab">Pinned transfers</span><div class="ctl">
+    <div class="chips" id="segPinned">
+      <button class="on" data-v="off">Off</button><button data-v="on" title="Non-blocking copies from pinned system RAM: faster swapping, more host RAM reserved.">On</button>
+    </div></div></div>
   <div class="orow"><span class="lab">Weights in memory</span><div class="ctl">
     <select id="quant-sel">
       <option value="fp8_e4m3fn">fp8 (half the memory)</option>
@@ -681,7 +688,8 @@ var S = {
   view: "create", size: "832x480", image: null, audio: null,
   status: null, jobs: [], images: [], libFilter: "", batch: 1,
   setupCursor: 0, taskId: null, taskCursor: 0, setupSeen: false, lightbox: null,
-  rec: null, uploading: 0
+  rec: null, uploading: 0,
+  swapAuto: true          // block swap follows the card until it is moved
 };
 function $(id) { return document.getElementById(id); }
 async function api(path, opts) {
@@ -804,7 +812,15 @@ function syncPlan() {
       (Number($("acfg-sl").value) !== 1
         ? ", and lip-sync strength above 1 adds a pass per step" : "") +
       ". Block swap keeps " + $("swap-sl").value + " of the model's 48 blocks " +
-      "in system RAM — higher is slower but fits a smaller card.";
+      "in system RAM — higher is slower but fits a smaller card." +
+      (S.status && S.status.blocks_to_swap_default != null
+        ? " Your card's default is " + S.status.blocks_to_swap_default + "." : "") +
+      (Number($("prefetch-sl").value) > 0
+        ? " Prefetch " + $("prefetch-sl").value + " copies the next block while " +
+          "the current one computes, for about 0.3 GB more VRAM per block."
+        : "") +
+      (segOn("segPinned") === "on"
+        ? " Pinned transfers reserve system RAM for faster copies." : "");
   }
   saveDraft();
 }
@@ -825,7 +841,8 @@ var SLIDERS = [
   ["acfg-sl", "acfgVal", function (v) { return v.toFixed(1); }, 2],
   ["ascale-sl", "ascaleVal", function (v) { return v.toFixed(1); }, 1],
   ["lora-sl", "loraVal", function (v) { return v.toFixed(2); }, 1],
-  ["swap-sl", "swapVal", function (v) { return v + " / 48"; }, 40]
+  ["swap-sl", "swapVal", function (v) { return v + " / 48"; }, 40],
+  ["prefetch-sl", "prefetchVal", function (v) { return String(v); }, 0]
 ];
 function setSlider(row, value) {
   $(row[0]).value = value;
@@ -834,13 +851,14 @@ function setSlider(row, value) {
 var draftReady = false;
 function saveDraft() {
   if (!draftReady) return;
-  var d = { v: 2, prompt: $("description").value, size: S.size,
+  var d = { v: 3, prompt: $("description").value, size: S.size,
     image: S.image ? { name: S.image.name } : null,
     audio: S.audio ? { name: S.audio.name, label: S.audio.label,
                        duration: S.audio.duration } : null,
     start: $("trimStart").value, len: $("trimLen").value,
     quant: $("quant-sel").value, attn: $("attn-sel").value,
     voice: segOn("segVoice"), tiled: segOn("segTiled"), t5: segOn("segT5"),
+    pinned: segOn("segPinned"), swap_auto: S.swapAuto,
     negative: $("neg-prompt").value };
   SLIDERS.forEach(function (r) { d[r[0]] = $(r[0]).value; });
   store("avatar.draft", d);
@@ -855,11 +873,17 @@ function loadDraft() {
     if (d.audio && d.audio.name) setAudio(d.audio, inputUrl(d.audio.name));
     $("trimStart").value = d.start || "0";
     $("trimLen").value = d.len || "";
-    SLIDERS.forEach(function (r) { if (d[r[0]] != null) setSlider(r, d[r[0]]); });
+    // block swap follows the card unless it was moved; a draft from before
+    // v3 does not carry the old fixed 40 forward
+    S.swapAuto = d.v >= 3 ? !!d.swap_auto : true;
+    SLIDERS.forEach(function (r) {
+      if (r[0] === "swap-sl" && S.swapAuto) return;
+      if (d[r[0]] != null) setSlider(r, d[r[0]]); });
     if (d.quant) $("quant-sel").value = d.quant;
     if (d.attn) $("attn-sel").dataset.want = d.attn;
     setSeg("segVoice", d.voice); setSeg("segTiled", d.tiled);
     if (d.v >= 2) setSeg("segT5", d.t5);
+    setSeg("segPinned", d.pinned);
     if (d.negative) $("neg-prompt").value = d.negative;
   }
   draftReady = true;
@@ -1070,6 +1094,8 @@ function collect() {
     audio_scale: Number($("ascale-sl").value),
     lora_strength: Number($("lora-sl").value),
     blocks_to_swap: Number($("swap-sl").value),
+    prefetch_blocks: Number($("prefetch-sl").value),
+    non_blocking: segOn("segPinned") === "on",
     quantization: $("quant-sel").value,
     attention: $("attn-sel").value,
     isolate_voice: segOn("segVoice") !== "off",
@@ -1287,6 +1313,10 @@ function reuse(im) {
   if (im.shift) setSlider(SLIDERS[1], im.shift);
   if (im.audio_cfg) setSlider(SLIDERS[2], im.audio_cfg);
   if (im.audio_scale) setSlider(SLIDERS[3], im.audio_scale);
+  if (im.blocks_to_swap != null) {
+    setSlider(SLIDERS[5], im.blocks_to_swap); S.swapAuto = false; }
+  if (im.prefetch_blocks != null) setSlider(SLIDERS[6], im.prefetch_blocks);
+  if (im.non_blocking != null) setSeg("segPinned", im.non_blocking ? "on" : "off");
   closeLightbox();
   show("create");
   grow($("description"));
@@ -1331,6 +1361,10 @@ function openLightbox(im) {
               ["Steps", im.steps || "—"],
               ["Lip-sync strength", im.audio_cfg || "—"],
               ["Weights", im.quantization === "disabled" ? "bf16" : "fp8"],
+              ["Block swap", im.blocks_to_swap == null ? "—" :
+               im.blocks_to_swap + " / 48" +
+               (im.prefetch_blocks ? ", prefetch " + im.prefetch_blocks : "") +
+               (im.non_blocking ? ", pinned transfers" : "")],
               ["Model", short(im.model) || "—"]];
   if (im.parts > 1) rows.push(["Rendered in", im.parts + " parts, joined"]);
   if (im.lora) rows.push(["Distill LoRA", short(im.lora)]);
@@ -1880,6 +1914,15 @@ async function refreshStatus() {
   var st;
   try { st = await api("/api/status"); } catch (e) { return; }
   S.status = st;
+  if (st.blocks_to_swap_default != null) {
+    // block swap's default is the card's: the slider starts there, and
+    // Back to defaults returns there
+    SLIDERS[5][3] = st.blocks_to_swap_default;
+    if (S.swapAuto && Number($("swap-sl").value) !== st.blocks_to_swap_default) {
+      setSlider(SLIDERS[5], st.blocks_to_swap_default);
+      syncPlan();
+    }
+  }
   var pill = $("enginePill");
   var stale = !!(st.stale_models && st.comfy_online);
   pill.classList.toggle("on", !!st.ready && !stale);
@@ -1954,11 +1997,12 @@ function wire() {
   $("segSize").querySelectorAll("button").forEach(function (b) {
     b.addEventListener("click", function () { setSize(b.dataset.v); syncPlan(); });
   });
-  ["segVoice", "segTiled", "segT5"].forEach(function (id) {
+  ["segVoice", "segTiled", "segT5", "segPinned"].forEach(function (id) {
     $(id).querySelectorAll("button").forEach(function (b) {
       b.addEventListener("click", function () { setSeg(id, b.dataset.v); saveDraft(); });
     });
   });
+  $("swap-sl").addEventListener("input", function () { S.swapAuto = false; });
   SLIDERS.forEach(function (row) {
     $(row[0]).addEventListener("input", function (e) {
       $(row[1]).textContent = row[2](Number(e.target.value)); syncPlan(); });
@@ -1984,11 +2028,13 @@ function wire() {
   });
   $("btnSeedClear").addEventListener("click", function () { $("seed").value = ""; });
   $("btnResetOpts").addEventListener("click", function () {
+    S.swapAuto = true;            // back to the card's block swap
     SLIDERS.forEach(function (r) { setSlider(r, r[3]); });
     var prec = (S.status && S.status.config && S.status.config.precision) || "fp8";
     $("quant-sel").value = prec === "bf16" ? "disabled" : "fp8_e4m3fn";
     $("attn-sel").value = "sdpa";
     setSeg("segVoice", "on"); setSeg("segTiled", "on"); setSeg("segT5", "gpu");
+    setSeg("segPinned", "off");
     $("seed").value = "";
     $("neg-prompt").value = DEFAULT_NEGATIVE;
     syncPlan(); toast("Back to defaults.");

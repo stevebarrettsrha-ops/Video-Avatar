@@ -78,8 +78,10 @@ def run(slow: bool = False) -> Suite:
                     ("parts of 30 windows", {"windows_per_part": 30},
                      "windows_per_part"),
                     ("an unknown size", {"size": "999x999"}, "Size"),
+                    ("a size that is not text", {"size": {"a": 1}}, "Size"),
                     ("steps that are text", {"steps": "many"}, "steps"),
                     ("block swap past 48", {"blocks_to_swap": 49}, "blocks_to_swap"),
+                    ("prefetch past 40", {"prefetch_blocks": 41}, "prefetch_blocks"),
                     ("a prompt that is not text", {"prompt": 5}, "prompt"),
                     ("five runs", {"runs": 5}, "runs"),
                     ("a negative seed", {"seed": -1}, "seed")):
@@ -330,7 +332,9 @@ def run(slow: bool = False) -> Suite:
                     f"{took:.1f}s {j.get('status')} {j.get('error', '')}")
 
     # -- the sampler also counts tensors onto the card: not steps ----------
-    with comfy(delay=3, MOCK_LOAD_TENSORS="1896") as mock, Workspace() as ws:
+    # on a 12 GB card, whose block swap default is 30
+    with comfy(delay=3, MOCK_LOAD_TENSORS="1896",
+               MOCK_VRAM=str(12 * 1024 ** 3)) as mock, Workspace() as ws:
         fake_weights(ws / "models")
         with studio(mock.url, ws / "data", ws / "models") as app:
             upload(app.url, "face.png", PNG)
@@ -371,6 +375,20 @@ def run(slow: bool = False) -> Suite:
             s.check("and the bar never walks backwards, from the load through "
                     "the steps to the finish",
                     pcts == sorted(pcts) and pcts[-1] == 100, str(pcts))
+            st = requests.get(f"{app.url}/api/status", timeout=20).json()
+            s.equal("block swap's default follows the card the engine reports: "
+                    "30 on 12 GB", st["blocks_to_swap_default"], 30)
+            graph = list(requests.get(f"{mock.url}/prompts", timeout=10)
+                         .json().values())[-1]
+            swap = next(n["inputs"] for n in graph.values()
+                        if n["class_type"] == "WanVideoBlockSwap")
+            done = next(j for j in requests.get(f"{app.url}/api/jobs",
+                                                timeout=10).json()
+                        if j["id"] == job_id)
+            s.equal("a render that names no block swap gets the card's, and "
+                    "the clip records it",
+                    (swap["blocks_to_swap"], done["images"][0]["blocks_to_swap"]),
+                    (30, 30))
 
     # -- transformers 5 in ComfyUI's Python ---------------------------------
     # the real PC's case: pip cannot downgrade it. The compatibility node is
@@ -520,6 +538,8 @@ def run(slow: bool = False) -> Suite:
             st = requests.get(f"{app.url}/api/status", timeout=20).json()
             s.equal("the memory precision is a setting",
                     st["config"]["precision"], "bf16")
+            s.equal("block swap's default follows the engine's card: 40 on "
+                    "the mock's RTX 4060", st["blocks_to_swap_default"], 40)
 
     # -- an engine without the LongCat nodes -------------------------------
     with comfy(MOCK_OMIT="WanVideoLongCatAvatarExtendEmbeds") as mock, \

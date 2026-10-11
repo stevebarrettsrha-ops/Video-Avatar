@@ -63,9 +63,14 @@ They do not establish that a complete render fits that hardware:
   11 GB CPU text encoder on a later prompt. Allow additional RAM for the
   VAE, audio models, frames, loading copies and the operating system;
   32 GB is a tight starting point, not a guarantee.
-- **Block swap 40 of 48.** Most of the DiT stays in system RAM and visits
-  the GPU a block at a time. Block prefetch defaults to zero, leaving more
+- **Block swap by the card: 40 of 48 on 8 GB.** Most of the DiT stays in
+  system RAM and visits the GPU a block at a time. A 12 GB card starts at
+  30, 16 GB at 24, 24 GB at 16; the engine's own VRAM figure decides, or the
+  last preflight's before it is up. Block prefetch defaults to zero, leaving more
   space for activations instead of keeping an extra block on the card.
+  Settings has **Block prefetch** and **Pinned transfers** for a card with
+  room to spare: both overlap the next block's copy with the compute, and
+  they are the speed levers of block swap.
 - **umT5 on the GPU in fp8.** The 11 GB text encoder goes to the card as
   fp8, about 6.7 GB, while the DiT is still in RAM. It reads the prompt in
   seconds and is dropped straight after. The result is cached on disk, so
@@ -205,7 +210,9 @@ lips listen to the isolated voice.
 | Lip-sync strength | 2 | `audio_cfg_scale`. Above 1 adds a model pass per step. 3–5 is stronger lip sync, and slower. |
 | Audio scale | 1.0 | Raise it if the mouth under-moves. |
 | Distill LoRA | 1.0 | The alpha64 LoRA. The older rank-128 one hurts the window extension. |
-| Block swap | 40 / 48 | Lower is faster on a bigger card (the workflow uses 25). |
+| Block swap | by card | 48 under 7 GB of VRAM, 40 on 8 GB, 30 on 12 GB, 24 on 16 GB, 16 on 24 GB, none from 32 GB. Lower is faster when the card has room (the workflow uses 25). A moved slider keeps your value; Back to defaults returns to the card's. |
+| Block prefetch | 0 | Copies the next swapped block onto the card while the current one computes. 1 usually recovers most of block swap's speed cost, for one more block of VRAM (about 0.3 GB in fp8). |
+| Pinned transfers | off | Non-blocking copies from pinned system RAM: faster swapping, more host RAM reserved. |
 | Weights in memory | fp8 | bf16 doubles the RAM needed. |
 | Attention | sdpa | sageattention 1.0.6 does not work with LongCat. |
 | Isolate the voice | on | MelBandRoFormer. Without it, background music moves the lips too. |

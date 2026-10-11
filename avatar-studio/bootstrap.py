@@ -460,6 +460,28 @@ def _vram_bytes(python: str) -> tuple[int, str]:
 GIB = 1024 ** 3
 
 
+def blocks_to_swap_default(vram: int | float | None) -> int:
+    """Block swap for the card: as low as it allows. Each of the 48 blocks is
+    about 0.3 GB in fp8, and a 93-frame window's activations at 480p, the
+    VAE and the audio models need a few GB beside them. The tiers are the
+    preflight's, in the decimal bytes it counts (an 11 GB card is in the
+    8 GB class, as its note says). 40 held on the real 8 GB PC; a card that
+    was not read gets the same."""
+    if not vram:
+        return 40
+    if vram < 7e9:
+        return 48
+    if vram < 12e9:
+        return 40
+    if vram < 15e9:
+        return 30
+    if vram < 20e9:
+        return 24
+    if vram < 30e9:
+        return 16
+    return 0
+
+
 def assess(vram: int, ram: int, free_disk: int, download: int,
            peak: int, lowvram: bool = True,
            precision: str = "fp8") -> tuple[str, list[str]]:
@@ -1579,6 +1601,18 @@ def comfy_stats(url: str) -> dict | None:
     except Exception:
         pass
     return None
+
+
+def comfy_vram(url: str) -> int:
+    """The card's memory in bytes as the engine answering sees it, or 0."""
+    try:
+        r = requests.get(f"{url}/system_stats", timeout=3)
+        if r.status_code == 200:
+            devices = r.json().get("devices") or []
+            return int((devices[0] if devices else {}).get("vram_total") or 0)
+    except Exception:
+        pass
+    return 0
 
 
 def engine_foreign(stats: dict | None, comfy_dir: str | Path | None) -> bool:

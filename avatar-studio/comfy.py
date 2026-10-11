@@ -618,12 +618,16 @@ class ComfyClient:
                            "value": int(p.get("blocks_to_swap", 40))},
                 "img": {"names": ["offload_img_emb"], "value": False},
                 "txt": {"names": ["offload_txt_emb"], "value": False},
+                # Pinned (non-blocking) transfers and prefetching the next
+                # block overlap the copy with the compute: block swap's two
+                # speed levers, both Settings. Off by default: a prefetched
+                # block sits on the card and pinning reserves host RAM, and
+                # the small-card defaults give that room to activations.
                 "nb": {"names": ["use_non_blocking"],
                        "value": bool(p.get("non_blocking", False))},
                 "vace": {"names": ["vace_blocks_to_swap"], "value": 0},
-                # Prefetch holds an extra transformer block on CUDA. The
-                # conservative default gives that headroom to activations.
-                "prefetch": {"names": ["prefetch_blocks"], "value": 0},
+                "prefetch": {"names": ["prefetch_blocks"],
+                             "value": int(p.get("prefetch_blocks") or 0)},
                 "debug": {"names": ["block_swap_debug"], "value": False}})
             loader_wanted["swap"] = {"names": ["block_swap_args"],
                                      "value": ["1", 0]}

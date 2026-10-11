@@ -581,6 +581,9 @@ def run_job(job_id: str, params: dict) -> None:
             "audio_cfg": params.get("audio_cfg"),
             "audio_scale": params.get("audio_scale"),
             "quantization": params.get("quantization"),
+            "blocks_to_swap": params.get("blocks_to_swap"),
+            "prefetch_blocks": params.get("prefetch_blocks") or 0,
+            "non_blocking": bool(params.get("non_blocking", False)),
             "isolate_voice": params.get("isolate_voice", True),
             "note": built.get("note", ""),
             "seed": params["seed"], "batch_index": 0,
@@ -644,6 +647,15 @@ def web_asset(name: str):
 # --------------------------------------------------------------------------- #
 # status / setup
 # --------------------------------------------------------------------------- #
+def card_vram(online: bool | None = None) -> int:
+    """The card's memory: as the engine reports it when online, else the
+    last preflight's measurement, else 0 for a card not read."""
+    if online is None:
+        online = comfy_online(cfg["comfy_url"])
+    vram = bootstrap.comfy_vram(cfg["comfy_url"]) if online else 0
+    return vram or int(cfg.get("vram") or 0)
+
+
 @app.get("/api/status")
 def api_status():
     online = comfy_online(cfg["comfy_url"])
@@ -704,6 +716,10 @@ def api_status():
             bootstrap.comfy_python(cfg))
     payload["ready"] = bool(online and payload["nodes_ready"] and not missing
                             and not payload["transformers_bad"])
+    # block swap's default follows the card: the page's slider starts there
+    vram = card_vram(online)
+    payload["vram"] = vram
+    payload["blocks_to_swap_default"] = bootstrap.blocks_to_swap_default(vram)
     return jsonify(payload)
 
 
@@ -1178,8 +1194,11 @@ def api_generate():
         params["audio_cfg"] = _number(params, "audio_cfg", 2, 0, 20)
         params["audio_scale"] = _number(params, "audio_scale", 1, 0, 10)
         params["lora_strength"] = _number(params, "lora_strength", 1, 0, 2)
-        params["blocks_to_swap"] = _number(params, "blocks_to_swap", 40, 0,
-                                           48, int)
+        params["blocks_to_swap"] = _number(
+            params, "blocks_to_swap",
+            bootstrap.blocks_to_swap_default(card_vram()), 0, 48, int)
+        params["prefetch_blocks"] = _number(params, "prefetch_blocks", 0, 0,
+                                            40, int)
         params["ref_frame_index"] = _number(params, "ref_frame_index", 10,
                                             -100, 1000, int)
         params["ref_mask_frame_range"] = _number(
@@ -1192,7 +1211,8 @@ def api_generate():
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     params["size"] = params.get("size") or DEFAULT_SIZE
-    if params["size"] not in SIZES:
+    # text first: a list or object cannot be looked up in the size table
+    if not isinstance(params["size"], str) or params["size"] not in SIZES:
         return jsonify({"error": "Size must be one of "
                                  + ", ".join(k.replace("x", "×") for k in SIZES)
                                  + "."}), 400
@@ -1312,7 +1332,13 @@ def api_input():
 
 @app.get("/api/preflight")
 def api_preflight():
-    return jsonify(bootstrap.preflight(cfg))
+    measured = bootstrap.preflight(cfg)
+    # remembered, so block swap's default knows the card before the engine
+    # is up to say
+    if measured.get("vram") and cfg.get("vram") != measured["vram"]:
+        cfg["vram"] = measured["vram"]
+        bootstrap.save_config(cfg)
+    return jsonify(measured)
 
 
 # --------------------------------------------------------------------------- #

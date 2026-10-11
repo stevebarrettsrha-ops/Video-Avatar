@@ -244,6 +244,7 @@ def run(slow: bool = False) -> Suite:
         swap = nodes_of(g, "WanVideoBlockSwap")[0][1]["inputs"]
         s.equal("40 of 48 blocks swapped by default", swap["blocks_to_swap"], 40)
         s.equal("no extra prefetched block on the small-card default", swap["prefetch_blocks"], 0)
+        s.equal("and no pinned transfers by default", swap["use_non_blocking"], False)
         lora = nodes_of(g, "WanVideoLoraSelect")[0][1]["inputs"]
         s.check("the alpha64 distill LoRA at 1.0, not merged",
                 lora["lora"] == "LongCat_distill_lora_alpha64_bf16.safetensors"
@@ -282,6 +283,14 @@ def run(slow: bool = False) -> Suite:
                 not nodes_of(g, "WanVideoBlockSwap")
                 and "block_swap_args" not in
                 nodes_of(g, "WanVideoModelLoader")[0][1]["inputs"])
+        fast = client.build({**BASE, "audio_seconds": 3, "blocks_to_swap": 24,
+                             "prefetch_blocks": 1, "non_blocking": True})
+        client.queue(fast["prompt"])
+        fast_swap = nodes_of(fast["prompt"], "WanVideoBlockSwap")[0][1]["inputs"]
+        s.equal("block prefetch and pinned transfers travel to the swap node, "
+                "and ComfyUI accepts them",
+                (fast_swap["blocks_to_swap"], fast_swap["prefetch_blocks"],
+                 fast_swap["use_non_blocking"]), (24, 1, True))
         s.check("isolation off feeds the trimmed audio straight in",
                 not nodes_of(g, comfy.MELBAND)
                 and nodes_of(g, comfy.EMBEDS)[0][1]["inputs"]["audio_1"]
