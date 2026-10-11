@@ -1603,6 +1603,14 @@ def comfy_stats(url: str) -> dict | None:
     return None
 
 
+def engine_wait_limit(alive: bool) -> int:
+    """How long a job waits on an engine that answers nothing: five minutes
+    for one this app cannot see, half an hour for a process this app
+    started that is still running. Paging a 28 GB model through RAM can
+    hold its replies that long, and its death ends the wait at once."""
+    return 1800 if alive else 300
+
+
 def comfy_vram(url: str) -> int:
     """The card's memory in bytes as the engine answering sees it, or 0."""
     try:

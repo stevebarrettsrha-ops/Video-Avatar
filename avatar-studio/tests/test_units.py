@@ -279,6 +279,10 @@ def run(slow: bool = False) -> Suite:
     s.equal("8 GB of RAM against a 16 GB peak is hard", v, "hard")
     v, _ = bootstrap.assess(24 * gib, 64 * gib, 30e9, 42e9, 16e9)
     s.equal("no disk for the download is hard", v, "hard")
+    s.equal("a job waits five minutes on a quiet engine it cannot see, half an "
+            "hour on a live process it started",
+            (bootstrap.engine_wait_limit(False), bootstrap.engine_wait_limit(True)),
+            (300, 1800))
     s.equal("block swap follows the card: 48 under 7 GB, 40 on 8, 30 on 12, "
             "24 on 16, 16 on 24, none from 32, and 40 for a card not read",
             [bootstrap.blocks_to_swap_default(v) for v in

@@ -73,6 +73,7 @@ FAKE_MP4 = b"\x00\x00\x00\x20ftypisom\x00\x00\x02\x00isomiso2mp41" + b"\x00" * 2
 # served as that webm. Without it, renders are FAKE_MP4 — header-only bytes,
 # fine for the API tests, undecodable by design.
 FLAKY = [0]                 # /history replies still to drop (POST /flaky)
+BUSY = [False]              # ping answers, node list and history do not (POST /busy)
 TEST_VIDEO: list = []       # [bytes] once a test has posted one
 
 
@@ -370,7 +371,11 @@ class H(BaseHTTPRequestHandler):
                 pass
             self.close_connection = True
             return
-        if p == "/object_info":
+        if BUSY[0] and (p == "/object_info" or p.startswith("/history/")):
+            # an engine moving a 28 GB model: its ping answers, its heavy
+            # replies do not (test-only: POST /busy)
+            self._send(503, {"error": "busy loading"})
+        elif p == "/object_info":
             self._send(200, _object_info())
         elif p == "/system_stats":
             system = {"comfyui_version": "0.3.75",
@@ -473,6 +478,9 @@ class H(BaseHTTPRequestHandler):
                     if pid in QUEUE_PENDING:     # as ComfyUI: gone, no history
                         QUEUE_PENDING.remove(pid)
             self._send(200, {})
+        elif p == "/busy":               # test-only: heavy replies fail
+            BUSY[0] = bool(json.loads(raw or b"{}").get("on"))
+            self._send(200, {"busy": BUSY[0]})
         elif p == "/flaky":              # test-only: drop the next N /history
             FLAKY[0] = int(json.loads(raw or b"{}").get("history", 0))
             self._send(200, {"flaky": FLAKY[0]})

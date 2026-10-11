@@ -171,6 +171,34 @@ def run(slow: bool = False) -> Suite:
             page.click('#segT5 button[data-v="gpu"]')
             page.click("#btnCloseSettings")
 
+            # -- an engine too busy to list its nodes reads busy ------------
+            # (a real PC read "Restart the engine" and "Set up" mid-load)
+            requests.post(f"{mock.url}/busy", json={"on": True}, timeout=5)
+            requests.post(f"{app.url}/api/upload",          # forgets the schema
+                          files={"file": ("busy.png", png())}, timeout=20)
+            page.evaluate("refreshStatus()")
+            try:
+                page.wait_for_function(
+                    "document.querySelector('#enginePill span').textContent"
+                    " === 'Engine busy'", timeout=10000)
+            except Exception:  # noqa: BLE001
+                pass
+            s.equal("an engine that answers its ping but not its node list "
+                    "reads busy, not \"Restart the engine\" or \"Set up\"",
+                    (page.locator("#enginePill span").inner_text(),
+                     page.locator("#genLabel").inner_text()),
+                    ("Engine busy", "Engine busy"))
+            requests.post(f"{mock.url}/busy", json={"on": False}, timeout=5)
+            page.evaluate("refreshStatus()")
+            try:
+                page.wait_for_function(
+                    "document.querySelector('#enginePill span').textContent"
+                    " === 'Engine ready'", timeout=10000)
+            except Exception:  # noqa: BLE001
+                pass
+            s.equal("and ready again when it answers",
+                    page.locator("#enginePill span").inner_text(), "Engine ready")
+
             # -- an upload in flight holds Generate back --------------------
             page.route("**/api/upload", lambda route: (time.sleep(1.5),
                                                        route.continue_()))

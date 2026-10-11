@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import random
 import threading
 import time
@@ -199,14 +200,19 @@ def rehearse(graph: dict, part: int = 0) -> dict:
             del g[k]
 
 
+# how long the engine's node schema is trusted before it is read again (a
+# test shortens it to watch a stale one serve)
+SCHEMA_TTL = float(os.environ.get("AVATAR_SCHEMA_TTL") or 120)
+
+
 class ComfyClient:
     def __init__(self, url: str = "http://127.0.0.1:8188") -> None:
         self.url = url.rstrip("/")
-        import os
         self.rehearsal = os.environ.get("AVATAR_REHEARSAL") == "1"
         self.client_id = str(uuid.uuid4())
         self._schema: dict | None = None
         self._schema_at = 0.0
+        self.schema_stale = False       # the last read failed; this is older
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
@@ -214,11 +220,26 @@ class ComfyClient:
     # ------------------------------------------------------------------ #
     def schema(self, force: bool = False) -> dict:
         with self._lock:
-            if force or self._schema is None or time.time() - self._schema_at > 120:
-                r = requests.get(f"{self.url}/object_info", timeout=30)
-                r.raise_for_status()
-                self._schema = r.json()
-                self._schema_at = time.time()
+            if force or self._schema is None \
+                    or time.time() - self._schema_at > SCHEMA_TTL:
+                try:
+                    r = requests.get(f"{self.url}/object_info", timeout=30)
+                    r.raise_for_status()
+                    self._schema = r.json()
+                    self._schema_at = time.time()
+                    self.schema_stale = False
+                except requests.RequestException:
+                    # an engine busy moving a 28 GB model answers its ping
+                    # but can miss this reply (a real PC's status read
+                    # "Restart the engine" mid-load): what it said last
+                    # still describes it. Asked again in a minute, not on
+                    # every poll. A forced read, or nothing to fall back
+                    # on, raises as before.
+                    if force or self._schema is None:
+                        raise
+                    self.schema_stale = True
+                    self._schema_at = time.time() - SCHEMA_TTL \
+                        + min(60.0, SCHEMA_TTL)
             return self._schema
 
     def has(self, class_type: str) -> bool:
