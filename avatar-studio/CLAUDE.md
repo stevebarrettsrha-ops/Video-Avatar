@@ -88,7 +88,14 @@
     quotes its fatal line), instead of waiting five minutes unreachable. The
     sampler's "Loading transformer parameters" progress (1896 tensors) is
     labelled as loading, not as steps: the stage counts steps only when the
-    progress max equals the scheduler's steps.
+    progress max equals the scheduler's steps. The wrapper zeroes that bar
+    once the weights are on the card (`load_weights` ends with
+    `update_absolute(0)`), so `ws_listener` keeps each bar's high-water
+    mark and a 0 after counting up reads "model loaded, on step 1 of 12",
+    never "0 of 1896". The load is worth `LOAD_SHARE` (a quarter) of that
+    window's slice of the bar and its steps fill the rest; the bar never
+    walks backwards, so the pre-sampling creep stops at what the first
+    window's first step is worth. The mock engine replays the zeroing.
 
 ## Graceful degradation
 

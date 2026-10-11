@@ -348,16 +348,29 @@ def run(slow: bool = False) -> Suite:
                 return job["status"] != "running"
             wait_for(watch, 60, 0.2)
             loading = [x for x in seen if "loading the model onto the GPU" in x[0]]
+            counts = {x[0].split(", ")[1].split(" of")[0] for x in loading}
             s.check("loading the model's 1896 tensors is named as such, never "
                     "\"step 424 of 1896\" (what a real PC showed)",
                     loading and not any("of 1896" in x[0] and "step" in x[0]
                                         for x in seen), str(seen[:6]))
-            s.check("and it does not move the bar as if steps were done",
-                    all(p <= 12 for _, p in loading), str(loading[:3]))
+            s.check("the count moves with the load and the bar with it, "
+                    "within the quarter of the window the load is worth",
+                    len(counts) > 1 and loading[-1][1] > loading[0][1]
+                    and all(p <= 28 for _, p in loading), str(loading))
+            s.check("the wrapper zeroing its bar at the end of the load reads "
+                    "\"model loaded\", never \"0 of 1896\" (what the same PC "
+                    "sat on until step 1 was done)",
+                    any("model loaded, on step 1 of 12" in x[0] for x in seen)
+                    and not any(", 0 of 1896" in x[0] for x in seen),
+                    str([x for x in seen if "1896" in x[0]][-3:]))
             s.check("the real steps are still counted",
                     any("step 12 of 12" in x[0] or "step 11 of 12" in x[0]
                         for x in seen) or any("step" in x[0] and "of 12" in x[0]
                                               for x in seen), str(seen[-4:]))
+            pcts = [p for _, p in seen]
+            s.check("and the bar never walks backwards, from the load through "
+                    "the steps to the finish",
+                    pcts == sorted(pcts) and pcts[-1] == 100, str(pcts))
 
     # -- transformers 5 in ComfyUI's Python ---------------------------------
     # the real PC's case: pip cannot downgrade it. The compatibility node is
