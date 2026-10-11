@@ -279,6 +279,11 @@ def run(slow: bool = False) -> Suite:
     s.equal("8 GB of RAM against a 16 GB peak is hard", v, "hard")
     v, _ = bootstrap.assess(24 * gib, 64 * gib, 30e9, 42e9, 16e9)
     s.equal("no disk for the download is hard", v, "hard")
+    s.equal("block swap follows the card: 48 under 7 GB, 40 on 8, 30 on 12, "
+            "24 on 16, 16 on 24, none from 32, and 40 for a card not read",
+            [bootstrap.blocks_to_swap_default(v) for v in
+             (6 * gib, 8_585_216_000, 12 * gib, 16 * gib, 24 * gib, 32 * gib,
+              0)], [48, 40, 30, 24, 16, 0, 40])
     v, notes = bootstrap.assess(8 * gib, 32 * gib, 500e9, 42e9, 30e9,
                                 precision="bf16")
     s.check("bf16 on a small card says to use fp8",

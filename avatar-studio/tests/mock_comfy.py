@@ -384,7 +384,8 @@ class H(BaseHTTPRequestHandler):
             # an RTX 4060 as torch reports it; busier while rendering
             self._send(200, {"system": system, "devices": [{
                 "name": "cuda:0 NVIDIA GeForce RTX 4060 : cudaMallocAsync",
-                "type": "cuda", "vram_total": 8_585_216_000,
+                "type": "cuda",
+                "vram_total": int(os.environ.get("MOCK_VRAM", 8_585_216_000)),
                 "vram_free": 1_000_000_000 if busy else 7_500_000_000}]})
         elif p.startswith("/history/") and FLAKY[0] > 0:
             FLAKY[0] -= 1                 # a reply that never comes back

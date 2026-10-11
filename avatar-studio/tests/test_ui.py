@@ -76,7 +76,9 @@ def run(slow: bool = False) -> Suite:
     tmp = Path(tempfile.mkdtemp(prefix="avatar-ui-"))
     (tmp / "face.png").write_bytes(png())
     (tmp / "speech.wav").write_bytes(tone(7.5))
-    with comfy(delay=0.4) as mock, Workspace() as ws:
+    # the engine reports a 12 GB card, whose block swap default is 30
+    with comfy(delay=0.4, MOCK_VRAM=str(12 * 1024 ** 3)) as mock, \
+            Workspace() as ws:
         fake_weights(ws / "models")
         with studio(mock.url, ws / "data", ws / "models") as app, \
                 sync_playwright() as pw:
@@ -148,6 +150,21 @@ def run(slow: bool = False) -> Suite:
             # -- settings popover -----------------------------------------
             page.click("#btnSettings")
             s.check("settings open", page.locator("#settingsPop").is_visible())
+            try:
+                page.wait_for_function(
+                    "document.getElementById('swapVal').textContent === '30 / 48'",
+                    timeout=10000)
+            except Exception:  # noqa: BLE001
+                pass
+            s.equal("block swap starts at the card's default: 30 / 48 on the "
+                    "12 GB card the engine reports",
+                    page.locator("#swapVal").inner_text(), "30 / 48")
+            page.locator("#swap-sl").fill("20")
+            s.equal("moving it keeps the value",
+                    page.locator("#swapVal").inner_text(), "20 / 48")
+            page.click("#btnResetOpts")
+            s.equal("and Back to defaults returns to the card's, not a fixed 40",
+                    page.locator("#swapVal").inner_text(), "30 / 48")
             page.locator("#steps-sl").fill("8")
             s.equal("the steps readout follows its slider",
                     page.locator("#stepsVal").inner_text(), "8")

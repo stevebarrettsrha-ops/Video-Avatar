@@ -29,7 +29,8 @@ ODD = [None, "", " ", "0", "-1", "1e309", "NaN", "inf", "-inf", 0, -1, 1e309,
        12, 120, 121, 48, 49]
 KEYS = ["image", "audio", "audio_seconds", "audio_start", "prompt", "negative",
         "size", "steps", "shift", "cfg", "audio_cfg", "audio_scale",
-        "lora_strength", "blocks_to_swap", "seed", "runs", "quantization",
+        "lora_strength", "blocks_to_swap", "prefetch_blocks", "non_blocking",
+        "seed", "runs", "quantization",
         "attention", "isolate_voice", "tiled_vae", "t5_cpu", "audio_label",
         "ref_frame_index", "ref_mask_frame_range", "title"]
 

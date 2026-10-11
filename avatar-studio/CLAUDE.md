@@ -26,6 +26,15 @@
 5. **LongCat only runs at bf16 base precision.** Memory savings come from
    `quantization` (fp8_e4m3fn by default) and block swap, never from
    base_precision. Attention defaults to sdpa: sageattention 1.0.6 breaks it.
+   Block prefetch and pinned (non-blocking) transfers are Settings, off by
+   default: the 8 GB audit gives that VRAM and host RAM to activations.
+   Block swap's default follows the card: `bootstrap.blocks_to_swap_default`
+   (48 under 7 GB, 40 on 8, 30 on 12, 24 on 16, 16 on 24, none from 32; 40
+   for a card not read), which `/api/status` reports from the engine's own
+   VRAM figure, else the last preflight's (`cfg["vram"]`). The page's slider
+   starts there and Back to defaults returns there; a moved slider keeps its
+   value (draft v3 `swap_auto`), and drafts before v3 do not carry the old
+   fixed 40 forward. `comfy.build()` alone still falls back to 40.
 6. **The clip carries the original audio.** The lips listen to the
    MelBandRoFormer vocals; `CreateVideo` gets the trimmed original.
    Without the separator the clip still renders, with a note saying so.
