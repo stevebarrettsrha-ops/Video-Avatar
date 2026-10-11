@@ -257,8 +257,16 @@ def ws_listener() -> None:
                     # sampler's "step 8 of 8" is no longer what is running
                     ws_progress[pid] = {"node": str(data["node"])}
                 elif mtype == "progress" and pid:
-                    ws_progress.setdefault(pid, {}).update(
-                        value=data.get("value", 0), max=data.get("max", 0))
+                    # a bar's high-water mark, kept while its max is the
+                    # same: the wrapper zeroes its model-loading bar once
+                    # the weights are on the card, so a 0 after counting
+                    # up means loaded, not "0 of 1896" (what a real PC
+                    # showed until the first step was done)
+                    wp = ws_progress.setdefault(pid, {})
+                    value = data.get("value") or 0
+                    maximum = data.get("max") or 0
+                    peak = wp.get("peak", 0) if maximum == wp.get("max") else 0
+                    wp.update(value=value, max=maximum, peak=max(peak, value))
                 elif mtype in ("execution_success", "execution_error") and pid:
                     ws_progress.pop(pid, None)
                     # the last frame stays (take_preview caps how many): a
@@ -315,6 +323,19 @@ def elapsed(seconds: float) -> str:
         else f"{seconds}s"
 
 
+# The share of a window's slice of the bar that moving the model onto the
+# card is worth, when a window has to. On the real 8 GB PC the 1896 tensors
+# took seven minutes against twelve steps of several minutes each; on a big
+# card both shrink together. A quarter is the round middle of that.
+LOAD_SHARE = 0.25
+
+
+def window_pct(window: int, windows: int, fraction: float) -> float:
+    """The bar `fraction` of the way through a window: one bar across every
+    window of the clip, each an equal slice of the 88 points from 6 to 94."""
+    return round(6 + (window + min(max(fraction, 0.0), 1.0)) / windows * 88, 1)
+
+
 # --------------------------------------------------------------------------- #
 # generation job
 # --------------------------------------------------------------------------- #
@@ -336,6 +357,8 @@ def _wait_prompt(job_id: str, prompt_id: str, built: dict, set_state,
     windows = built["windows"]
     first = built["this_part"]["first"]
     parts = len(built["parts"])
+    steps = built.get("steps") or 0
+    loaded: set[int] = set()        # windows that moved the model onto the card
     unreachable_since = None
     while True:
         time.sleep(1.0)
@@ -371,30 +394,47 @@ def _wait_prompt(job_id: str, prompt_id: str, built: dict, set_state,
         took = elapsed(time.time() - started)
         where = (f" · part {built['part'] + 1} of {parts}" if parts > 1 else "")
         local = built["samplers"].get(str(wp.get("node") or ""))
-        steps = built.get("steps") or 0
+        with jobs_lock:
+            was = jobs[job_id].get("pct") or 0   # the bar never walks backwards
         if maximum and local is not None and steps and maximum != steps:
             # the sampler also reports moving the model's tensors onto the
-            # card (1896 of them for LongCat): not steps, and not progress
-            # through the clip — a real PC showed "step 424 of 1896"
-            set_state(stage=(f"Window {local + 1} of {windows} · loading the "
-                             f"model onto the GPU, {value} of {maximum}{where}"
+            # card (1896 of them for LongCat) through the same channel: not
+            # steps, and not progress through the clip — a real PC showed
+            # "step 424 of 1896". It is worth LOAD_SHARE of the window's
+            # slice of the bar. The wrapper zeroes that bar once the weights
+            # are on the card (the same PC then sat on "0 of 1896" until
+            # step 1 was done), so a 0 after counting up means loaded.
+            loaded.add(local)
+            if value == 0 and wp.get("peak"):
+                fraction = LOAD_SHARE
+                what = f"model loaded, on step 1 of {steps}"
+            else:
+                fraction = LOAD_SHARE * min(value / maximum, 1)
+                what = f"loading the model onto the GPU, {value} of {maximum}"
+            set_state(pct=max(was, window_pct(local, windows, fraction)),
+                      stage=(f"Window {local + 1} of {windows} · {what}{where}"
                              f" · {took}"))
         elif maximum and local is not None:
-            # one bar across every window of the clip: each an equal slice
+            # one bar across every window of the clip: each an equal slice.
+            # A window that moved the model onto the card spent LOAD_SHARE
+            # of its slice on that, and its steps fill the rest
             window = local                       # samplers map to the clip's
-            done = (window + min(value / maximum, 1)) / windows
-            set_state(pct=round(6 + done * 88, 1),
+            done = min(value / maximum, 1)
+            if window in loaded:
+                done = LOAD_SHARE + (1 - LOAD_SHARE) * done
+            set_state(pct=max(was, window_pct(window, windows, done)),
                       stage=(f"Window {window + 1} of {windows} · step "
                              f"{value} of {maximum}{where} · {took}"))
         else:
             # no steps to count: the node's name and a running clock say it
-            # is alive, and the bar never walks backwards
+            # is alive. Before the first window reports, the bar creeps up
+            # towards 12, but never past what that window's first step is
+            # worth, so real progress never has to catch a guess up
             node = (built["prompt"].get(wp.get("node") or "") or {})
-            with jobs_lock:
-                was = jobs[job_id].get("pct") or 0
             floor = 6 + first / windows * 88
-            set_state(pct=max(was, floor if first else
-                              min(5 + (time.time() - started) / 8, 12)),
+            creep = min(5 + (time.time() - started) / 8, 12,
+                        window_pct(0, windows, 1 / max(steps, 1)))
+            set_state(pct=max(was, floor if first else creep),
                       stage=f"{stage_for(node.get('class_type', ''))}{where}"
                             f" · {took}")
         if time.time() - started > 48 * 3600:

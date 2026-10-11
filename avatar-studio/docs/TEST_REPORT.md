@@ -188,9 +188,17 @@ The same run turned up two smaller problems:
   engine mid-render, and the job fails in 0.9 s.
 - **"step 424 of 1896" was not a step.** The sampler reports moving the
   model's 1896 tensors onto the card through the same progress channel. The
-  card now reads "loading the model onto the GPU, 424 of 1896", and the bar
-  does not move for it. Steps are counted only when the progress total
-  matches the scheduler's steps.
+  card now reads "loading the model onto the GPU, 424 of 1896". Steps are
+  counted only when the progress total matches the scheduler's steps.
+- **"0 of 1896" at 12% after the load had finished.** The wrapper zeroes
+  its loading bar once the weights are on the card, and the card printed
+  that last message as it came, at the 12% the bar had crept to before the
+  sampler, until step 1 was done — eight minutes in on this PC. The listener
+  now keeps each bar's high-water mark, so that zero reads "model loaded,
+  on step 1 of 12"; the load moves the bar through a quarter of the
+  window's slice, the steps fill the rest, and the bar never walks
+  backwards. The mock engine replays the zeroing, and the api suite checks
+  the count, the wording, and that the bar only ever rises.
 
 ## Out of the box: the shipped zip, start to finish
 

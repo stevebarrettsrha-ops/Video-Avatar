@@ -177,12 +177,19 @@ def _execute(pid, graph):
                  "data": {"node": nid, "prompt_id": pid}})
         if nid in samplers and tensors:
             # the wrapper reports moving the model onto the card through
-            # the same progress channel ("Loading transformer parameters")
-            for k in range(1, 6):
-                time.sleep(DELAY / 10)
+            # the same progress channel ("Loading transformer parameters").
+            # ComfyUI sends a bar's first and last updates at once and
+            # throttles the rest; the wrapper then zeroes the bar, so a
+            # finished load ends on value 0 — what a real PC showed as
+            # "0 of 1896" until the first step was done
+            for value in (1, *(tensors * k // 5 for k in range(1, 5)),
+                          tensors, 0):
+                time.sleep(DELAY / 7)
                 ws_send({"type": "progress",
-                         "data": {"value": tensors * k // 5, "max": tensors,
+                         "data": {"value": value, "max": tensors,
                                   "prompt_id": pid, "node": nid}})
+            # the first step is the long one on a small card
+            time.sleep(DELAY / 2)
         if nid in samplers:
             for i in range(steps):
                 time.sleep(DELAY / steps)
