@@ -12,8 +12,9 @@ It runs on **LongCat-Avatar** through kijai's ComfyUI-WanVideoWrapper.
 | `ComfyUI-WanVideoWrapper-longcat_avatar.zip` | The wrapper's `longcat_avatar` branch as uploaded. Its nodes are now in the wrapper's `main`, which the app installs. |
 
 To run it on Windows, double-click `avatar-studio/run.bat`. On Linux or
-macOS, run `avatar-studio/run.sh`. Either one opens <http://127.0.0.1:7808>
-and walks you through setup.
+macOS, run `avatar-studio/run.sh` (from the Linux file manager: right-click,
+**Run as a Program**; the [app README](avatar-studio/README.md#running-it) has
+the rest). Either one opens <http://127.0.0.1:7808> and walks you through setup.
 
 The [app README](avatar-studio/README.md) has the hardware notes. On an
 8 GB GPU with 32 GB of RAM it targets fp8 weights, block swap and

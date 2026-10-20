@@ -112,8 +112,17 @@ and restart it; this app cannot edit that machine's files.
 
 ## Running it
 
-**Windows**: double-click `run.bat`. **Linux and macOS**: run `./run.sh`.
-Both open <http://127.0.0.1:7808>.
+**Windows**: double-click `run.bat`. **Linux and macOS**: open a terminal in
+this folder and run `./run.sh`. Both open <http://127.0.0.1:7808>.
+
+On Linux, double-clicking `run.sh` in the file manager opens it in a text
+editor; that is the file manager's choice, not a fault. Right-click it and
+pick **Run as a Program** instead: it opens a terminal and runs there, and
+keeps the window open if something fails. If a terminal answers `Permission
+denied` (an unzip can drop the executable bit), run `bash run.sh`, or
+`chmod +x run.sh` once. On Debian and Ubuntu the first run also needs
+`sudo apt-get install -y python3-venv`; the script says so when it is missing,
+and builds its environment again once it is installed.
 
 The first launch opens the setup sheet. It offers three routes: use an
 existing ComfyUI, install a fresh managed one, or connect to one you start
