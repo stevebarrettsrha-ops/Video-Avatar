@@ -3,6 +3,8 @@ __pycache__/
 avatar-studio/data/
 avatar-studio/tests/.inline.js
 avatar-studio/.venv/
+avatar-studio/.venv-*/
 avatar-studio/ComfyUI/
 avatar-studio/comfy-venv/
+avatar-studio/comfy-venv-*/
 tests/.real-out/

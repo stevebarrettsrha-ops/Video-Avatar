@@ -159,6 +159,21 @@ verified missing root cannot silently become a new download destination.
 test that starts the server) turns it off: test configs name made-up folders
 on purpose.
 
+A saved path can also be *there* and still wrong: an app folder on a drive
+shared by Windows and Linux carries the Windows `comfy-venv/Scripts/python.exe`
+(or a portable build's `python_embeded/python.exe`), and every run of it is
+`[Errno 8] Exec format error`. `foreign_binary()` reads the first bytes (MZ,
+ELF, Mach-O); `_location_state()` counts a foreign saved interpreter as
+missing so `heal_paths()` clears it, and `comfy_python()` /
+`portable_python()` pass over one. The foreign venv is never rebuilt in
+place — that would break it for the other system — so `venv_dir()` gives
+this one `comfy-venv-linux` (or `-windows`, `-darwin`) beside it, and
+`run.sh` does the same for a Windows `.venv` (`.venv-linux`). Setup never
+puts the interpreter that *builds* the venv (often the app's own, torch-less)
+into `cfg["python"]`: a setup that stops early must not leave the engine on
+it. Git's `sudo apt-get` goes through `manager._elevate()` (`sudo -n`, else
+`pkexec` on a desktop), because a task has no terminal to type a password in.
+
 ## Validation gate
 
 ```bash
